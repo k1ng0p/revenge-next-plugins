@@ -1,0 +1,19 @@
+{
+	"format": 1,
+	"id": "k1ngop.platform-indicators",
+	"name": "Platform Indicators",
+	"description": "Adds platform indicators (Desktop, Mobile, Web...) to users",
+	"author": "k1ng_op, Martinz64",
+	"version": "1.2.0",
+	"dependencies": {
+		"revenge.api": {
+			"version": ">=1 <2"
+		},
+		"discord": {
+			"version": "*"
+		}
+	},
+	"dist": {
+		"script": "index.js"
+	}
+}
