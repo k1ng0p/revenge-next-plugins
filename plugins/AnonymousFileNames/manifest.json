@@ -3,7 +3,7 @@
 	"id": "k1ngop.anonymous-file-names",
 	"name": "Anonymous File Names",
 	"description": "Randomizes file names before you upload them.",
-	"author": "k1ng_op, maisy",
+	"author": "k1ng_op, siguma",
 	"version": "1.0.0",
 	"dependencies": {
 		"revenge.api": { "version": ">=1 <2" },
