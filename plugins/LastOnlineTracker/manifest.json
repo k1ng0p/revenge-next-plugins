@@ -2,9 +2,9 @@
 	"format": 1,
 	"id": "k1ngop.last-online-tracker",
 	"name": "LastOnlineTracker",
-	"description": "Shows 'Active X ago' under usernames in the member list once they go offline",
+	"description": "Shows 'Active X ago' under usernames in the member list, DM list, and DM header once they go offline",
 	"author": "k1ng_op",
-	"version": "1.7.1",
+	"version": "2.0.4",
 	"dependencies": {
 		"revenge.api": { "version": ">=1 <2" },
 		"discord": { "version": "*" }
