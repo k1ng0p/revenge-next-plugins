@@ -4,7 +4,7 @@
 	"name": "Platform Spoof",
 	"description": "Spoofs your Discord gateway platform so others see a different client icon on your profile.",
 	"author": "k1ng_op",
-	"version": "2.4.3",
+	"version": "2.6.2",
 	"icon": "LaptopPhoneIcon",
 	"dependencies": {
 		"revenge.api": {
