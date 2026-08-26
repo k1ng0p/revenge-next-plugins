@@ -192,13 +192,20 @@ let activityStatusOrig = null;
 
 export default plugin({
   async start({ cleanup }) {
-    plugin.requireReload();
-    await settings.get();
-    await loadPersisted();
-    startPresence();
-    cleanup(stopPresence, flushPersist);
+    const step = (name, fn) => {
+      try {
+        return fn();
+      } catch (e) {
+        throw new Error(`[LastOnlineTracker] failed at step "${name}": ${e?.message ?? e}`);
+      }
+    };
 
-    cleanup(
+    await step("settings.get", () => settings.get());
+    await step("loadPersisted", () => loadPersisted());
+    step("startPresence", () => startPresence());
+    step("cleanup(stopPresence, flushPersist)", () => cleanup(stopPresence, flushPersist));
+
+    step("getModules(MessagesItemChannelContent)", () => cleanup(
       revenge.modules.finders.getModules(byExactName("MessagesItemChannelContent"), (mod) => {
         const loc = locate(mod);
         if (!loc) return;
@@ -232,9 +239,9 @@ export default plugin({
           })
         );
       }, { max: Infinity })
-    );
+    ));
 
-    cleanup(
+    step("getModules(ActivityStatus)", () => cleanup(
       revenge.modules.finders.getModules(byExactName("ActivityStatus"), (mod) => {
         const loc = locate(mod);
         if (!loc) return;
@@ -251,8 +258,7 @@ export default plugin({
           })
         );
       }, { max: Infinity })
-    );
+    ));
   },
   SettingsComponent
 });
-                                                                                          
