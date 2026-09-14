@@ -43,7 +43,7 @@ fun Map<String, Any?>.obj(key: String) = this[key] as? Map<String, Any?>
 
 fun Map<String, Any?>.str(key: String) = this[key] as? String
 
-data class PluginDef(val dir: File, val id: String, val jarName: String?, val scriptName: String?)
+data class PluginDef(val dir: File, val id: String, val version: String?, val jarName: String?, val scriptName: String?)
 
 val pluginDefs = file("plugins").listFiles().orEmpty()
     .filter(File::isDirectory)
@@ -52,8 +52,9 @@ val pluginDefs = file("plugins").listFiles().orEmpty()
         val manifest = File(dir, "manifest.json").takeIf(File::isFile)?.let(::parseJson)
             ?: return@mapNotNull null
         val id = manifest.str("id") ?: return@mapNotNull null
+        val version = manifest.str("version") ?: return@mapNotNull null
         val dist = manifest.obj("dist").orEmpty()
-        PluginDef(dir, id, dist.obj("android")?.str("path"), dist.str("script"))
+        PluginDef(dir, id, version, dist.obj("android")?.str("path"), dist.str("script"))
     }
 
 // ---------------------------------------------------------------------------------------------
@@ -269,14 +270,14 @@ val buildJs = tasks.register("buildJs") {
 
 val packageAllPlugins = tasks.register("packageAllPlugins") {
     group = "revenge"
-    description = "Builds and packages every plugin into build/dist/<id>.zip."
+    description = "Builds and packages every plugin into build/dist/<id>@<version>.zip."
 }
 
 fun taskSuffix(dirName: String): String =
     dirName.split(Regex("[^A-Za-z0-9]")).filter(String::isNotEmpty)
         .joinToString("") { it.replaceFirstChar(Char::uppercase) }
 
-pluginDefs.forEach { (dir, id, jarName, scriptName) ->
+pluginDefs.forEach { (dir, id, version, jarName, scriptName) ->
     val pkg = tasks.register<Zip>("package${taskSuffix(dir.name)}") {
         group = "revenge"
         description = "Packages '$id' into a distributable ZIP."
@@ -300,7 +301,7 @@ pluginDefs.forEach { (dir, id, jarName, scriptName) ->
             }
         }
 
-        archiveFileName.set("$id.zip")
+        archiveFileName.set("$id@$version.zip")
         destinationDirectory.set(layout.buildDirectory.dir("dist"))
         doLast { logger.lifecycle("Packaged $id -> ${archiveFile.get().asFile.relativeTo(rootDir)}") }
     }
