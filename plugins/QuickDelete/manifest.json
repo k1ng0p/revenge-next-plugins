@@ -5,7 +5,7 @@
 	"description": "Skips the confirmation prompt when deleting a message or an embed.",
 	"icon": "TrashIcon",
 	"author": "k1ng_op, purple_Eyez",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"dependencies": {
 		"revenge.api": {
 			"version": ">=1 <2"
