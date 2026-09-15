@@ -3,6 +3,7 @@
 	"id": "k1ngop.last-online-tracker",
 	"name": "LastOnlineTracker",
 	"description": "Shows 'Active X ago' under usernames in the member list, DM list, and DM header once they go offline",
+	"icon": "spectator",
 	"author": "k1ng_op",
 	"version": "2.4.2",
 	"dependencies": {
