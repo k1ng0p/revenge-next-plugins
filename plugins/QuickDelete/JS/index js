@@ -4,7 +4,7 @@ const { Design } = revenge.discord.design;
 const { AlertActionCreators } = revenge.discord.actions;
 const { Logger } = revenge.discord.common.logger;
 
-const settings = jsonStorage.getJsonStorage(
+const settingsStore = jsonStorage.getJsonStorage(
 	jsonStorage.pluginStoragePathFor("k1ngop.quick-delete", "storage.json"),
 	{ default: { autoConfirmMessage: true, autoConfirmEmbed: true, debug: false }, load: true },
 );
@@ -42,8 +42,8 @@ function confirmButton(actions) {
 }
 
 function SettingsPage() {
-	const s = settings.use() ?? settings.cache;
-	const set = (k, v) => settings.set({ [k]: v });
+	const s = settingsStore.use() ?? settingsStore.cache;
+	const set = (k, v) => settingsStore.set({ [k]: v });
 
 	return jsx(components.Page, {
 		children: jsxs(Design.TableRowGroup, {
@@ -74,11 +74,11 @@ function SettingsPage() {
 
 let unpatch;
 
-export default plugin({
-	start() {
+export default {
+	onLoad() {
 		unpatch = patcher.instead(AlertActionCreators, "openAlert", (args, orig) => {
 			const [key, alert] = args;
-			const s = settings.cache;
+			const s = settingsStore.cache;
 			if (!s.autoConfirmMessage && !s.autoConfirmEmbed) return orig(...args);
 
 			const title = text(alert?.props?.title);
@@ -93,9 +93,8 @@ export default plugin({
 			confirm();
 		});
 	},
-	stop() {
+	onUnload() {
 		unpatch?.();
 	},
-	SettingsComponent: SettingsPage,
-});
-
+	settings: SettingsPage,
+};
