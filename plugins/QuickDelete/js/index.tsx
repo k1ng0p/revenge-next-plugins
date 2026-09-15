@@ -40,10 +40,9 @@ const pickConfirmButton = (buttons: Button[]) => {
 	if (buttons.length === 2) return buttons.find((b) => !NonConfirmVariants.has(b.variant ?? ""))?.onPress;
 };
 
-const { Page } = revenge.components;
-const { Design } = revenge.discord.design;
-
 const Settings = ({ api }: { api: { jsonStorage: { use(): typeof DEFAULTS; set(patch: Partial<typeof DEFAULTS>): void } } }) => {
+	const { Page } = revenge.components;
+	const { Design } = revenge.discord.design;
 	const settings = api.jsonStorage.use() ?? DEFAULTS;
 
 	return (
@@ -118,4 +117,3 @@ export default plugin({
 	},
 	SettingsComponent: Settings,
 });
-          
