@@ -5,7 +5,7 @@
 	"description": "Skips confirmation prompts for destructive actions - deleting messages, embeds, channels, leaving servers and groups.",
 	"icon": "FlashIcon",
 	"author": "k1ng_op",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"dependencies": {
 		"revenge.api": {
 			"version": ">=1 <2"
