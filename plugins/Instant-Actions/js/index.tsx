@@ -14,22 +14,34 @@ const DEFAULTS = {
 
 type Settings = typeof DEFAULTS;
 
-// capture = confirm button isn't reachable via props, has to be rendered and pressed for real
-const RULES: { on: keyof Settings; test: (key: string, title: string) => boolean; capture?: string }[] = [
+// rest: call the API directly instead of showing a popup
+const RULES: { on: keyof Settings; test: (key: string, title: string) => boolean; rest?: (props: any) => unknown }[] = [
 	{ on: "autoConfirmMessage", test: (_, t) => t === "Delete Message" },
 	{ on: "autoConfirmEmbed", test: (_, t) => t === "Delete Embed" },
 	{ on: "autoConfirmChannel", test: (_, t) => t === "Delete Channel" },
-	{ on: "autoConfirmServer", test: (k, t) => t === "Leave Server" || k === "guild-action-sheet-leave-server", capture: "Yes" },
+	{
+		on: "autoConfirmServer",
+		test: (k, t) => t === "Leave Server" || k === "guild-action-sheet-leave-server",
+		rest: (p) => p?.guild?.id && getHttp()?.del({ url: `/users/@me/guilds/${p.guild.id}`, body: { lurking: false } }),
+	},
 	{ on: "autoConfirmGroup", test: (_, t) => t.startsWith("Leave '") },
 	{ on: "autoConfirmRole", test: (_, t) => t.startsWith("Delete ") },
-	{ on: "autoConfirmFriend", test: (k) => k === "remove-friend", capture: "Remove Friend" },
-	{ on: "autoConfirmCancelRequest", test: (k) => k === "cancel-friend-request", capture: "Cancel Friend Request" },
+	{
+		on: "autoConfirmFriend",
+		test: (k) => k === "remove-friend",
+		rest: (p) => p?.user?.id && getHttp()?.del({ url: `/users/@me/relationships/${p.user.id}` }),
+	},
+	{
+		on: "autoConfirmCancelRequest",
+		test: (k) => k === "cancel-friend-request",
+		rest: (p) => p?.user?.id && getHttp()?.del({ url: `/users/@me/relationships/${p.user.id}` }),
+	},
 ];
 
-// block/ignore skip openAlert entirely, matched by button shape instead
-const BUTTON_RULES: { on: keyof Settings; text: string; variant?: string }[] = [
-	{ on: "autoConfirmBlock", text: "Block", variant: "destructive" },
-	{ on: "autoConfirmIgnore", text: "Ignore" }, // no variant - excludes the "secondary" ignore-friend-request button
+// action sheets skip openAlert, matched by openLazy's key instead
+const SHEET_RULES: { on: keyof Settings; key: string; rest: (props: any) => unknown }[] = [
+	{ on: "autoConfirmBlock", key: "BlockConfirmationActionSheet", rest: (p) => p?.userId && getHttp()?.put({ url: `/users/@me/relationships/${p.userId}`, body: { type: 2 } }) },
+	{ on: "autoConfirmIgnore", key: "IgnoreConfirmationActionSheet", rest: (p) => p?.userId && getHttp()?.put({ url: `/users/@me/relationships/${p.userId}/ignore` }) },
 ];
 
 const GROUPS: { title: string; rows: [key: keyof Settings, label: string, sub: string][] }[] = [
@@ -66,12 +78,9 @@ const GROUPS: { title: string; rows: [key: keyof Settings, label: string, sub: s
 
 let logger: InstanceType<typeof revenge.discord.common.logger.Logger> | undefined;
 let unpatch: (() => void) | undefined;
-let unafterButton: (() => void) | undefined;
-
-// capture window for dialogs whose confirm button only exists once rendered
-let captureUntil = 0;
-let captureText = "";
-let fired = false;
+let unpatchSheet: (() => void) | undefined;
+let http: any;
+const getHttp = () => (http ??= revenge.modules.finders.lookupModule(revenge.modules.finders.filters.withProps("get", "getAPIBaseURL"))[0]);
 
 const log = (...args: unknown[]) => {
 	logger?.log(...args);
@@ -138,26 +147,27 @@ export default plugin({
 	start({ jsonStorage }) {
 		logger = new revenge.discord.common.logger.Logger("InstantActions");
 
-		unafterButton = revenge.react.jsxRuntime.afterJSX(revenge.discord.design.Design.Button, (element) => {
-			const props = element?.props;
-			if (typeof props?.onPress !== "function") return element;
-			const text = flattenText(props.text ?? props.children);
+		unpatchSheet = revenge.patcher.instead(revenge.discord.actions.ActionSheetActionCreators, "openLazy", (args, original) => {
+			const [, key, props] = args;
 			const settings = jsonStorage.cache ?? DEFAULTS;
+			const rule = SHEET_RULES.find((r) => settings[r.on] && r.key === key);
 
-			const btnRule = BUTTON_RULES.find((r) => settings[r.on] && text === r.text && props.variant === r.variant);
-			if (btnRule) {
-				if (settings.debug) log("button", btnRule.on, text);
-				queueMicrotask(props.onPress);
-				return element;
+			if (!rule) {
+				if (settings.debug) log("openLazy no match", key);
+				return original(...args);
 			}
 
-			// microtask instead of setTimeout(0) - runs before the frame paints,
-			// so the dialog ideally never becomes visible
-			if (Date.now() < captureUntil && !fired && props.variant === "destructive" && text === captureText) {
-				fired = true;
-				queueMicrotask(props.onPress);
+			const sent = rule.rest(props);
+			if (sent) {
+				if (settings.debug) log("sheet rest", rule.on);
+				Promise.resolve(sent)
+					.then(() => (props as any)?.onSuccess?.())
+					.catch((e: unknown) => settings.debug && log("sheet rest error", rule.on, String(e)));
+				return;
 			}
-			return element;
+
+			if (settings.debug) log("sheet rest skipped, no id found", rule.on, props ? Object.keys(props) : []);
+			return original(...args);
 		});
 
 		unpatch = revenge.patcher.instead(revenge.discord.actions.AlertActionCreators, "openAlert", (args, original) => {
@@ -180,22 +190,30 @@ export default plugin({
 
 			if (confirm) return confirm();
 
-			if (!rule.capture) return original(...args);
+			if (typeof props?.onConfirm === "function") {
+				if (settings.debug) log("onConfirm", rule.on);
+				return props.onConfirm();
+			}
 
-			// no button reachable via props - render it for real and catch the
-			// confirm button once React actually creates it (brief flash)
-			fired = false;
-			captureText = rule.capture;
-			captureUntil = Date.now() + 3000;
+			if (rule.rest) {
+				const sent = rule.rest(props);
+				if (sent) {
+					if (settings.debug) log("rest", rule.on);
+					(sent as Promise<unknown>)?.catch?.((e: unknown) => settings.debug && log("rest error", rule.on, String(e)));
+					return;
+				}
+				if (settings.debug) log("rest skipped, no id found", rule.on, { propKeys: props ? Object.keys(props) : [], guildId: props?.guild?.id, userId: props?.user?.id });
+			}
+
 			return original(...args);
 		});
 	},
 	stop() {
 		unpatch?.();
 		unpatch = undefined;
-		unafterButton?.();
-		unafterButton = undefined;
+		unpatchSheet?.();
+		unpatchSheet = undefined;
 	},
 	SettingsComponent: Settings,
 });
-    
+	
