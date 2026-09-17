@@ -1,6 +1,8 @@
 const DEFAULTS = {
 	autoConfirmMessage: true,
 	autoConfirmEmbed: true,
+	autoConfirmAttachment: true,
+	autoConfirmMaskedLink: false,
 	autoConfirmChannel: false,
 	autoConfirmServer: false,
 	autoConfirmGroup: false,
@@ -9,15 +11,18 @@ const DEFAULTS = {
 	autoConfirmBlock: false,
 	autoConfirmIgnore: false,
 	autoConfirmCancelRequest: false,
+	autoConfirmVoiceCall: false,
 	debug: false,
 };
 
 type Settings = typeof DEFAULTS;
 
 // rest: call the API directly instead of showing a popup
-const RULES: { on: keyof Settings; test: (key: string, title: string) => boolean; rest?: (props: any) => unknown }[] = [
+const RULES: { on: keyof Settings; test: (key: string, title: string, content: string) => boolean; rest?: (props: any) => unknown }[] = [
 	{ on: "autoConfirmMessage", test: (_, t) => t === "Delete Message" },
-	{ on: "autoConfirmEmbed", test: (_, t) => t === "Delete Embed" },
+	{ on: "autoConfirmEmbed", test: (_, t, c) => t === "Delete Embed" || (t === "Are you sure?" && c === "This will remove all embeds on this message for everyone.") },
+	{ on: "autoConfirmAttachment", test: (_, t, c) => t === "Are you sure?" && c === "This will remove this attachment from this message permanently." },
+	{ on: "autoConfirmMaskedLink", test: (k) => k === "masked-link" },
 	{ on: "autoConfirmChannel", test: (_, t) => t === "Delete Channel" },
 	{
 		on: "autoConfirmServer",
@@ -36,6 +41,7 @@ const RULES: { on: keyof Settings; test: (key: string, title: string) => boolean
 		test: (k) => k === "cancel-friend-request",
 		rest: (p) => p?.user?.id && getHttp()?.del({ url: `/users/@me/relationships/${p.user.id}` }),
 	},
+	{ on: "autoConfirmVoiceCall", test: (k) => k === "start-voice-call" },
 ];
 
 // action sheets skip openAlert, matched by openLazy's key instead
@@ -50,6 +56,8 @@ const GROUPS: { title: string; rows: [key: keyof Settings, label: string, sub: s
 		rows: [
 			["autoConfirmMessage", "Messages", "Deletes messages without confirmation"],
 			["autoConfirmEmbed", "Embeds", "Deletes embeds without confirmation"],
+			["autoConfirmAttachment", "Attachments", "Removes attachments without confirmation"],
+			["autoConfirmMaskedLink", "Masked Links", "Opens links without the \"Leaving Discord\" warning"],
 		],
 	},
 	{
@@ -68,6 +76,7 @@ const GROUPS: { title: string; rows: [key: keyof Settings, label: string, sub: s
 			["autoConfirmBlock", "Block", "Blocks users without confirmation (this also unfriends them automatically)"],
 			["autoConfirmIgnore", "Ignore", "Ignores users without confirmation"],
 			["autoConfirmCancelRequest", "Cancel Friend Request", "Cancels outgoing friend requests without confirmation"],
+			["autoConfirmVoiceCall", "Voice Calls", "Starts DM voice calls without the \"Ready to start a call?\" prompt"],
 		],
 	},
 	{
@@ -175,10 +184,11 @@ export default plugin({
 			const settings = jsonStorage.cache ?? DEFAULTS;
 			const props = alert?.props;
 			const title = flattenText(props?.title);
-			const rule = RULES.find((r) => settings[r.on] && r.test(key, title));
+			const content = flattenText(props?.content);
+			const rule = RULES.find((r) => settings[r.on] && r.test(key, title, content));
 
 			if (!rule) {
-				if (settings.debug) log("no match", { key, title });
+				if (settings.debug) log("no match", { key, title, content });
 				return original(...args);
 			}
 
@@ -216,4 +226,4 @@ export default plugin({
 	},
 	SettingsComponent: Settings,
 });
-	
+	 
