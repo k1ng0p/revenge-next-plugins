@@ -45,7 +45,10 @@ const loadPersisted = async () => {
   if (!settings.cache?.persist) return;
   await lastSeenStorage.get();
   for (const [id, ts] of Object.entries(lastSeenStorage.cache ?? {}))
-    if (typeof ts === "number" && ts > 0) lastSeen.set(id, ts);
+    if (typeof ts === "number" && ts > 0) {
+      lastSeen.set(id, ts);
+      armIfOnline(id);
+    }
 };
 
 const markSeen = (userId) => {
@@ -64,6 +67,10 @@ const isOffline = (userId) => {
 };
 
 const seenOnline = new Set();
+const armIfOnline = (userId) => {
+  if (!isOffline(userId)) seenOnline.add(userId);
+};
+
 let unsubPresence = null;
 const startPresence = () => {
   unsubPresence = revenge.discord.flux.onFluxEventDispatched("PRESENCE_UPDATES", (e) => {
@@ -134,11 +141,6 @@ function SettingsComponent() {
         jsxs(revenge.discord.design.Design.TableRowGroup, {
           title: "Where to show it",
           children: [
-            jsx(revenge.discord.design.Design.Text, {
-              variant: "text-xs/medium", color: "text-muted",
-              style: { paddingHorizontal: 12, paddingBottom: 4 },
-              children: "These act as one on/off switch right now (any one enabled shows it everywhere) - per-surface control isn't in yet."
-            }),
             jsx(revenge.discord.design.Design.TableSwitchRow, {
               label: "DM list",
               subLabel: "Can look inconsistent or flicker in the DM list if your message previews is set to All.",
@@ -191,7 +193,7 @@ const combine = (native, label) =>
 let activityStatusOrig = null;
 
 export default plugin({
-  async start({ cleanup }) {
+  async start({ cleanup, plugin }) {
     const step = (name, fn) => {
       try {
         return fn();
@@ -205,6 +207,8 @@ export default plugin({
     step("startPresence", () => startPresence());
     step("cleanup(stopPresence, flushPersist)", () => cleanup(stopPresence, flushPersist));
 
+    if (plugin.startedLate) step("requireReload", () => plugin.requireReload());
+
     step("getModules(MessagesItemChannelContent)", () => cleanup(
       revenge.modules.finders.getModules(byExactName("MessagesItemChannelContent"), (mod) => {
         const loc = locate(mod);
@@ -217,6 +221,7 @@ export default plugin({
 
             const recipients = props?.channel?.recipients;
             if (recipients?.length !== 1) return rendered;
+            armIfOnline(recipients[0]);
             const seenAt = getSeen(recipients[0]);
             if (!isOffline(recipients[0]) || seenAt === undefined) return rendered;
             const label = labelFor(seenAt);
@@ -252,6 +257,7 @@ export default plugin({
             const rendered = orig(...args);
             const enabled = settings.cache?.header !== false || settings.cache?.memberList !== false;
             if (!props?.userId || !enabled) return rendered;
+            armIfOnline(props.userId);
             const seenAt = getSeen(props.userId);
             if (!isOffline(props.userId) || seenAt === undefined) return rendered;
             return combine(rendered, labelFor(seenAt));
@@ -262,3 +268,4 @@ export default plugin({
   },
   SettingsComponent
 });
+  
