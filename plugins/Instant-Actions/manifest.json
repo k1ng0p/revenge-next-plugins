@@ -2,10 +2,10 @@
 	"format": 1,
 	"id": "k1ngop.instant-actions",
 	"name": "Instant Actions",
-	"description": "Skips confirmation prompts for destructive actions - deleting messages, embeds, channels, leaving servers and groups.",
+	"description": "No more 'Are you sure?' Skips deletes, leaves, blocks, and other prompts. Toggle each one individually.",
 	"icon": "FlashIcon",
 	"author": "k1ng_op",
-	"version": "1.2.0",
+	"version": "1.2.1",
 	"dependencies": {
 		"revenge.api": {
 			"version": ">=1 <2"
