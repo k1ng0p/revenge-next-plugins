@@ -50,38 +50,38 @@ const SHEET_RULES: { on: keyof Settings; key: string; rest: (props: any) => unkn
 	{ on: "autoConfirmIgnore", key: "IgnoreConfirmationActionSheet", rest: (p) => p?.userId && getHttp()?.put({ url: `/users/@me/relationships/${p.userId}/ignore` }) },
 ];
 
-const GROUPS: { title: string; rows: [key: keyof Settings, label: string, sub: string][] }[] = [
+const GROUPS: { title: string; rows: [key: keyof Settings, label: string, sub: string, icon: string][] }[] = [
 	{
 		title: "Messages",
 		rows: [
-			["autoConfirmMessage", "Messages", "Deletes messages without confirmation"],
-			["autoConfirmEmbed", "Embeds", "Deletes embeds without confirmation"],
-			["autoConfirmAttachment", "Attachments", "Removes attachments without confirmation"],
-			["autoConfirmMaskedLink", "Masked Links", "Opens links without the \"Leaving Discord\" warning"],
+			["autoConfirmMessage", "Messages", "Deletes messages without confirmation", "ChatIcon"],
+			["autoConfirmEmbed", "Embeds", "Deletes embeds without confirmation", "EmbedIcon"],
+			["autoConfirmAttachment", "Attachments", "Removes attachments without confirmation", "AttachmentIcon"],
+			["autoConfirmMaskedLink", "Masked Links", "Opens links without the \"Leaving Discord\" warning", "LinkIcon"],
 		],
 	},
 	{
 		title: "Servers & Groups",
 		rows: [
-			["autoConfirmChannel", "Channels", "Deletes channels without confirmation"],
-			["autoConfirmServer", "Servers", "Leaves servers without confirmation"],
-			["autoConfirmGroup", "Groups", "Leaves group DMs without confirmation"],
-			["autoConfirmRole", "Roles", "Deletes roles without confirmation (also catches similar delete dialogs)"],
+			["autoConfirmChannel", "Channels", "Deletes channels without confirmation", "ChannelListIcon"],
+			["autoConfirmServer", "Servers", "Leaves servers without confirmation", "ic_leave_24px"],
+			["autoConfirmGroup", "Groups", "Leaves group DMs without confirmation", "GroupIcon"],
+			["autoConfirmRole", "Roles", "Deletes roles without confirmation", "role"],
 		],
 	},
 	{
 		title: "Friends & DMs",
 		rows: [
-			["autoConfirmFriend", "Unfriend", "Removes friends without confirmation"],
-			["autoConfirmBlock", "Block", "Blocks users without confirmation (this also unfriends them automatically)"],
-			["autoConfirmIgnore", "Ignore", "Ignores users without confirmation"],
-			["autoConfirmCancelRequest", "Cancel Friend Request", "Cancels outgoing friend requests without confirmation"],
-			["autoConfirmVoiceCall", "Voice Calls", "Starts DM voice calls without the \"Ready to start a call?\" prompt"],
+			["autoConfirmFriend", "Unfriend", "Removes friends without confirmation", "UserMinusIcon"],
+			["autoConfirmBlock", "Block", "Blocks users without confirmation (this also unfriends them automatically)", "ic_block"],
+			["autoConfirmIgnore", "Ignore", "Ignores users without confirmation", "EyeSlashIcon"],
+			["autoConfirmCancelRequest", "Cancel Friend Request", "Cancels outgoing friend requests without confirmation", "UserClockIcon"],
+			["autoConfirmVoiceCall", "Voice Calls", "Starts DM voice calls without the \"Ready to start a call?\" prompt", "PhoneCallIcon"],
 		],
 	},
 	{
 		title: "Debug",
-		rows: [["debug", "Debug logging", "Logs alert data to Debug Logs, for troubleshooting"]],
+		rows: [["debug", "Debug logging", "Logs alert data to Debug Logs, for troubleshooting", "debug"]],
 	},
 ];
 
@@ -126,20 +126,21 @@ const pickConfirm = (buttons: Btn[]) => {
 const Settings = ({ api }: { api: { jsonStorage: { use(): Settings; set(patch: Partial<Settings>): void } } }) => {
 	const { Page } = revenge.components;
 	const { Design } = revenge.discord.design;
-	const settings = api.jsonStorage.use() ?? DEFAULTS;
-
+	const { getAssetIdByName } = revenge.assets;
 	const { ScrollView } = revenge.react.ReactNative;
+	const settings = api.jsonStorage.use() ?? DEFAULTS;
 
 	return (
 		<Page>
 			<ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40, gap: 16 }}>
 				{GROUPS.map((group) => (
 					<Design.TableRowGroup title={group.title} key={group.title}>
-						{group.rows.map(([key, label, sub]) => (
+						{group.rows.map(([key, label, sub, icon]) => (
 							<Design.TableSwitchRow
 								key={key}
 								label={label}
 								subLabel={sub}
+								icon={<Design.TableRow.Icon source={getAssetIdByName(icon)} />}
 								value={settings[key]}
 								onValueChange={(v: boolean) => api.jsonStorage.set({ [key]: v })}
 							/>
@@ -226,4 +227,3 @@ export default plugin({
 	},
 	SettingsComponent: Settings,
 });
-	 
