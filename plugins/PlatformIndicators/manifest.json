@@ -5,7 +5,7 @@
 	"description": "Adds platform indicators (Desktop, Mobile, Web...) to users",
 	"icon": "ic_person_status",
 	"author": "k1ng_op, Martinz64",
-	"version": "1.2.5",
+	"version": "1.2.6",
 	"dependencies": {
 		"revenge.api": {
 			"version": ">=1 <2"
