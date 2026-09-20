@@ -116,15 +116,22 @@ function PlatformIcon({ platform, color, iconSize = 16, width = iconSize, height
 
 let myId;
 
+function getOwnStatus() {
+	const { SelfPresenceStore, PresenceStore } = revenge.discord.flux.Stores;
+	const status = SelfPresenceStore?.getStatus?.() ?? PresenceStore?.getStatus?.(myId);
+	return status && status !== "offline" ? status : null;
+}
+
 function getStatuses(userId) {
 	myId ??= revenge.discord.flux.Stores.UserStore?.getCurrentUser?.()?.id;
 
 	if (userId === myId) {
 		const sessions = revenge.discord.flux.Stores.SessionsStore?.getSessions?.() ?? {};
+		const ownStatus = getOwnStatus();
 		return Object.values(sessions).reduce((acc, s) => {
 			const client = s?.clientInfo?.client;
 			if (!client || client === "unknown") return acc;
-			acc[normalizePlatform(client)] = s.status;
+			acc[normalizePlatform(client)] = ownStatus ?? s.status;
 			return acc;
 		}, {});
 	}
@@ -136,6 +143,7 @@ const FALLBACK_ASPECT = { mobile: 0.62, vr: 1.75, desktop: 1.15, web: 1, embedde
 const ART_FILL = { mobile: [0.92, 0.94], vr: [0.96, 0.92], desktop: [0.78, 0.66], web: [0.84, 0.84], embedded: [0.9, 0.72] };
 const RING_RADIUS = { mobile: 0.2, desktop: 0.4, vr: 0.4, embedded: 0.4 };
 const RING_THICKNESS = 3;
+const USER_BAR_SHIFT = 3;
 
 function pickDotPlatform(statuses) {
 	return DOT_PRIORITY.find((p) => statuses[p]) ?? null;
@@ -149,9 +157,39 @@ function assetAspect(assetId, platform) {
 	return FALLBACK_ASPECT[platform] ?? 1;
 }
 
-function StatusIcons({ userId, size = 16 }) {
+function useStatusRerender(userId) {
 	const rerender = utils.react.useReRender();
-	React.useEffect(() => revenge.discord.flux.onFluxEventDispatched("PRESENCE_UPDATES", (p) => { rerender(); return p; }), [rerender]);
+	React.useEffect(() => {
+		const { onFluxEventDispatched, Stores } = revenge.discord.flux;
+		let mounted = true;
+		let last = JSON.stringify(getStatuses(userId) ?? {});
+
+		const refresh = () => {
+			if (!mounted) return;
+			const next = JSON.stringify(getStatuses(userId) ?? {});
+			if (next === last) return;
+			last = next;
+			rerender();
+		};
+		const later = () => setTimeout(refresh, 0);
+
+		const stores = [Stores.PresenceStore, Stores.SessionsStore, Stores.SelfPresenceStore].filter((store) => typeof store?.addChangeListener === "function");
+		stores.forEach((store) => store.addChangeListener(refresh));
+
+		const offEvents = ["PRESENCE_UPDATES", "PRESENCES_REPLACE", "SESSIONS_REPLACE"].map((name) =>
+			onFluxEventDispatched(name, (p) => { later(); return p; }),
+		);
+
+		return () => {
+			mounted = false;
+			stores.forEach((store) => store.removeChangeListener(refresh));
+			offEvents.forEach((off) => off());
+		};
+	}, [rerender, userId]);
+}
+
+function StatusIcons({ userId, size = 16 }) {
+	useStatusRerender(userId);
 	const statuses = getStatuses(userId) ?? {};
 	const dotPlatform = settings.cache?.experimentalStatusDot ? pickDotPlatform(statuses) : null;
 	return jsx(Fragment, {
@@ -161,17 +199,8 @@ function StatusIcons({ userId, size = 16 }) {
 	});
 }
 
-function StatusDot({ userId, original }) {
-	const rerender = utils.react.useReRender();
-	React.useEffect(() => {
-		const { onFluxEventDispatched } = revenge.discord.flux;
-		const offUpdates = onFluxEventDispatched("PRESENCE_UPDATES", (p) => {
-			if (!Array.isArray(p?.updates) || p.updates.some((u) => u?.user?.id === userId)) rerender();
-			return p;
-		});
-		const offReplace = onFluxEventDispatched("PRESENCES_REPLACE", (p) => { rerender(); return p; });
-		return () => { offUpdates(); offReplace(); };
-	}, [rerender, userId]);
+function StatusDot({ userId, original, inUserBar }) {
+	useStatusRerender(userId);
 
 	const statuses = getStatuses(userId) ?? {};
 	const platform = pickDotPlatform(statuses);
@@ -193,8 +222,9 @@ function StatusDot({ userId, original }) {
 	const borderRadius = kind === "web" ? shortSide / 2 : Math.round(shortSide * (RING_RADIUS[kind] ?? 0.2));
 
 	const style = ReactNative.StyleSheet.flatten(original.props.style) ?? {};
-	const right = (typeof style.right === "number" ? style.right : -3) + box / 2 - ringWidth / 2;
-	const bottom = (typeof style.bottom === "number" ? style.bottom : -3) + box / 2 - ringHeight / 2;
+	const shift = inUserBar ? USER_BAR_SHIFT : 0;
+	const right = (typeof style.right === "number" ? style.right : -3) + box / 2 - ringWidth / 2 + shift;
+	const bottom = (typeof style.bottom === "number" ? style.bottom : -3) + box / 2 - ringHeight / 2 + shift;
 
 	return jsx(ReactNative.View, {
 		style: {
@@ -206,7 +236,7 @@ function StatusDot({ userId, original }) {
 			borderRadius,
 			alignItems: "center",
 			justifyContent: "center",
-			backgroundColor: style.backgroundColor ?? "#242429",
+			backgroundColor: style.backgroundColor ?? (inUserBar ? "#101014" : "#242429"),
 		},
 		children: jsx(PlatformIcon, {
 			platform,
@@ -370,8 +400,13 @@ export default plugin({
 					const userId = props?.user?.id ?? kids.find((c) => c?.props?.user?.id)?.props?.user?.id;
 					if (!userId) return result;
 
-					const children = kids.slice();
-					children[index] = jsx(StatusDot, { userId, original }, original.key ?? "StatusDot");
+					const hasIcon = !!pickDotPlatform(getStatuses(userId) ?? {});
+					const inUserBar = typeof props?.size === "string" && props.size.startsWith("youBar");
+					const children = kids.map((kid, i) => {
+						if (i === index) return jsx(StatusDot, { userId, original, inUserBar }, original.key ?? "StatusDot");
+						if (hasIcon && kid?.props?.cutout != null) return { ...kid, props: { ...kid.props, cutout: undefined } };
+						return kid;
+					});
 					return { ...result, props: { ...result.props, children } };
 				} catch {
 					return result;
@@ -384,4 +419,4 @@ export default plugin({
 	},
 	SettingsComponent: SettingsPage,
 });
-		
+						   
