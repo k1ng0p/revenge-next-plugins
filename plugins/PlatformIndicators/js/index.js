@@ -22,43 +22,112 @@ function patchTarget(m) {
 
 const settings = jsonStorage.getJsonStorage(
 	jsonStorage.pluginStoragePathFor("k1ngop.platform-indicators", "storage.json"),
-	{ default: { dmTopBar: true, userList: true, profileUsername: true, fallbackColors: false, oldUserListIcons: false, experimentalStatusDot: false }, load: true },
+	{
+		default: {
+			legacyEnabled: false,
+			dmTopBar: false,
+			userList: false,
+			profileUsername: false,
+			fallbackColors: false,
+			experimentalStatusDot: true,
+			dotYouBar: true,
+			statusDotInlineRemaining: true,
+		},
+		load: true,
+	},
 );
+
+const SECTION_GAP = 16;
 
 let currentPlugin;
 
+function set(patch) {
+	const next = { ...patch };
+	if (next.legacyEnabled === true) next.experimentalStatusDot = false;
+	if (next.experimentalStatusDot === true) next.legacyEnabled = false;
+	settings.set(next);
+	currentPlugin?.requireReload();
+}
+
 function SettingsPage() {
 	const s = settings.use() ?? settings.cache;
-	const set = (k, v) => settings.set({ [k]: v });
 	const { Design } = revenge.discord.design;
 
-	const rows = [
+	const dotRows = [
+		["dotYouBar", "Show platform icon in you bar status dot"],
+	];
+
+	const legacyRows = [
 		["dmTopBar", "Show icons on the DM top bar"],
 		["userList", "Show icons on the users and DMs list"],
 		["profileUsername", "Show icons on user profiles"],
-		["fallbackColors", "Theme compatibility mode"],
 	];
 
+	const section = (key, props) => jsx(ReactNative.View, {
+		style: { marginBottom: SECTION_GAP },
+		children: jsx(Design.TableRowGroup, props),
+	}, key);
+
 	return jsx(revenge.components.Page, {
-		children: jsxs(Design.TableRowGroup, {
+		children: jsxs(ReactNative.ScrollView, {
+			contentContainerStyle: { paddingTop: SECTION_GAP, paddingBottom: SECTION_GAP * 2 },
 			children: [
-				...rows.map(([key, label]) =>
-					jsx(Design.TableSwitchRow, { label, value: s?.[key] ?? key !== "fallbackColors", onValueChange: (v) => set(key, v) }, key),
-				),
-				jsx(Design.TableSwitchRow, {
-					label: "Old user list icon style",
-					subLabel: "Moves status indicators to the right",
-					value: s?.oldUserListIcons ?? false,
-					onValueChange: (v) => set("oldUserListIcons", v),
+				section("dots", {
+					title: "Status Dot Indicators",
+					description: "Display platform icons directly on user status dots.",
+					children: [
+						jsx(Design.TableSwitchRow, {
+							label: "Enable status dots indicators",
+							subLabel: "Replace status dots with platform icons (Needs a reload)",
+							value: s?.experimentalStatusDot ?? true,
+							onValueChange: (v) => set({ experimentalStatusDot: v }),
+						}),
+						...dotRows.map(([key, label, subLabel]) =>
+							jsx(Design.TableSwitchRow, {
+								label,
+								subLabel,
+								value: s?.[key] ?? true,
+								disabled: !s?.experimentalStatusDot,
+								onValueChange: (v) => set({ [key]: v }),
+							}, key),
+						),
+						jsx(Design.TableSwitchRow, {
+							label: "Show remaining platform icon inline with username",
+							subLabel: "Show additional platform indicators beside usernames",
+							value: s?.statusDotInlineRemaining ?? true,
+							disabled: !s?.experimentalStatusDot,
+							onValueChange: (v) => set({ statusDotInlineRemaining: v }),
+						}),
+					],
 				}),
-				jsx(Design.TableSwitchRow, {
-					label: "Experimental: replace status dot with platform icon",
-					subLabel: "Replaces the avatar status dot with the platform icon. Needs a reload.",
-					value: s?.experimentalStatusDot ?? false,
-					onValueChange: (v) => {
-						set("experimentalStatusDot", v);
-						currentPlugin?.requireReload();
-					},
+				section("legacy", {
+					title: "Legacy Platform Indicators",
+					description: "Show platform icons next to usernames.",
+					children: [
+						jsx(Design.TableSwitchRow, {
+							label: "Enable legacy platform indicators",
+							value: s?.legacyEnabled ?? false,
+							onValueChange: (v) => set({ legacyEnabled: v }),
+						}),
+						...legacyRows.map(([key, label]) =>
+							jsx(Design.TableSwitchRow, {
+								label,
+								value: s?.[key] ?? false,
+								disabled: !s?.legacyEnabled,
+								onValueChange: (v) => set({ [key]: v }),
+							}, key),
+						),
+					],
+				}),
+				section("appearance", {
+					title: "Appearance",
+					children: [
+						jsx(Design.TableSwitchRow, {
+							label: "Theme compatibility mode",
+							value: s?.fallbackColors ?? false,
+							onValueChange: (v) => set({ fallbackColors: v }),
+						}),
+					],
 				}),
 			],
 		}),
@@ -76,6 +145,20 @@ function statusColor(status, useFallback) {
 		if (typeof token?.resolve === "function") return token.resolve();
 	} catch {}
 	return FALLBACK_COLORS[status] ?? FALLBACK_COLORS.offline;
+}
+
+const SURFACE_TOKEN_CANDIDATES = ["BACKGROUND_SECONDARY", "BACKGROUND_MOBILE_PRIMARY", "BACKGROUND_PRIMARY", "CARD_PRIMARY_BG"];
+const SURFACE_FALLBACK = { dmHeader: "#313338", dmList: "#2b2d31", memberList: "#2b2d31", profile: "#111214", youBar: "#111214" };
+
+function surfaceColor(context) {
+	for (const name of SURFACE_TOKEN_CANDIDATES) {
+		try {
+			const token = revenge.discord.common.Tokens?.colors?.[name];
+			const v = typeof token === "string" ? token : token?.resolve?.();
+			if (typeof v === "string") return v;
+		} catch {}
+	}
+	return SURFACE_FALLBACK[context] ?? "#242429";
 }
 
 const ASSET_NAMES = {
@@ -109,7 +192,6 @@ function findAsset(platform, forDot) {
 
 function PlatformIcon({ platform, color, iconSize = 16, width = iconSize, height = iconSize, forDot = false }) {
 	const assetId = findAsset(platform, forDot);
-
 	if (!assetId) return jsx(ReactNative.View, { children: jsx(ReactNative.View, { style: { width: iconSize, height: iconSize, borderRadius: 100, backgroundColor: color } }) });
 	return jsx(ReactNative.View, { children: jsx(ReactNative.Image, { style: { width, height, tintColor: color, resizeMode: "contain" }, source: assetId }) });
 }
@@ -118,8 +200,7 @@ let myId;
 
 function getOwnStatus() {
 	const { SelfPresenceStore, PresenceStore } = revenge.discord.flux.Stores;
-	const status = SelfPresenceStore?.getStatus?.() ?? PresenceStore?.getStatus?.(myId);
-	return status && status !== "offline" ? status : null;
+	return SelfPresenceStore?.getStatus?.() ?? PresenceStore?.getStatus?.(myId) ?? null;
 }
 
 function getStatuses(userId) {
@@ -140,10 +221,15 @@ function getStatuses(userId) {
 
 const DOT_PRIORITY = ["desktop", "mobile", "web", "embedded", "vr"];
 const FALLBACK_ASPECT = { mobile: 0.62, vr: 1.75, desktop: 1.15, web: 1, embedded: 1.3 };
-const ART_FILL = { mobile: [0.92, 0.94], vr: [0.96, 0.92], desktop: [0.78, 0.66], web: [0.84, 0.84], embedded: [0.9, 0.72] };
-const RING_RADIUS = { mobile: 0.2, desktop: 0.4, vr: 0.4, embedded: 0.4 };
-const RING_THICKNESS = 3;
-const USER_BAR_SHIFT = 3;
+const ART_FILL = { mobile: [0.92, 0.94], web: [0.84, 0.84] };
+const ART_GLYPH = {
+	desktop: { w: 0.78, h: 0.757, dx: -0.04, dy: 0.038 },
+	embedded: { w: 0.86, h: 0.73, dx: -0.028, dy: -0.02 },
+	vr: { w: 0.96, aspect: 1.58, dx: 0, dy: 0 },
+};
+const RING_THICKNESS = 2;
+const CONTEXT_SHIFT = { youBar: [0, 3], memberList: [0, 3], profile: [0, 3] };
+const CONTEXT_SCALE = { profile: 1.3 };
 
 function pickDotPlatform(statuses) {
 	return DOT_PRIORITY.find((p) => statuses[p]) ?? null;
@@ -155,6 +241,25 @@ function assetAspect(assetId, platform) {
 		if (width && height) return width / height;
 	} catch {}
 	return FALLBACK_ASPECT[platform] ?? 1;
+}
+
+function resolveContext(size) {
+	if (typeof size !== "string") return "other";
+	if (size.startsWith("youBar")) return "youBar";
+	if (size === "xxlarge") return "profile";
+	if (size === "refreshMedium32") return "memberList";
+	return "other";
+}
+
+function dotAllowedForContext(context) {
+	if (context === "youBar") return settings.cache?.dotYouBar ?? true;
+	return true;
+}
+
+function inlineIconsAllowed(legacyKey) {
+	if (settings.cache?.legacyEnabled) return !!settings.cache?.[legacyKey];
+	if (settings.cache?.experimentalStatusDot) return settings.cache?.statusDotInlineRemaining ?? true;
+	return false;
 }
 
 function useStatusRerender(userId) {
@@ -199,52 +304,93 @@ function StatusIcons({ userId, size = 16 }) {
 	});
 }
 
-function StatusDot({ userId, original, inUserBar }) {
+function plateShapes(kind, artWidth, artHeight, ringWidth, ringHeight) {
+	const t = RING_THICKNESS;
+	const part = (left, top, width, height, borderRadius) => ({ left, top, width, height, borderRadius });
+
+	switch (kind) {
+		case "mobile":
+			return [part(0, 0, ringWidth, ringHeight, artWidth * 0.14 + t)];
+		case "embedded":
+			return [part(0, 0, ringWidth, ringHeight, artHeight * 0.2 + t)];
+		case "desktop": {
+			const bodyHeight = artHeight * 0.77;
+			const footWidth = artWidth * 0.48 + t * 2;
+			return [
+				part(0, 0, ringWidth, bodyHeight + t * 2, artWidth * 0.12 + t),
+				part((ringWidth - footWidth) / 2, bodyHeight, footWidth, ringHeight - bodyHeight, t),
+			];
+		}
+		case "vr": {
+			const earWidth = artWidth * 0.175 + t * 2;
+			const earTop = artHeight * 0.28;
+			const earHeight = artHeight * 0.52 + t * 2;
+			const earRadius = artHeight * 0.12 + t;
+			return [
+				part(artWidth * 0.125, 0, artWidth * 0.75 + t * 2, ringHeight, artHeight * 0.24 + t),
+				part(0, earTop, earWidth, earHeight, earRadius),
+				part(ringWidth - earWidth, earTop, earWidth, earHeight, earRadius),
+			];
+		}
+		default:
+			return [part(0, 0, ringWidth, ringHeight, Math.min(ringWidth, ringHeight) / 2)];
+	}
+}
+
+function StatusDot({ userId, original, size }) {
 	useStatusRerender(userId);
+	const location = resolveContext(size);
+	if (!dotAllowedForContext(location)) return original;
 
 	const statuses = getStatuses(userId) ?? {};
 	const platform = pickDotPlatform(statuses);
-	const assetId = platform && findAsset(platform, true);
+	if (!platform) return original;
+	const kind = normalizePlatform(platform);
+
+	const assetId = findAsset(platform, true);
 	if (!assetId) return original;
 
-	const kind = normalizePlatform(platform);
 	const dotSize = typeof original.props.size === "number" ? original.props.size : 16;
-	const box = dotSize + (dotSize <= 20 ? 4 : 3);
+	const box = (dotSize + (dotSize <= 20 ? 4 : 3)) * (CONTEXT_SCALE[location] ?? 1);
 	const fit = kind === "vr" ? box * 1.1 : box;
 	const aspect = assetAspect(assetId, kind);
 	const width = aspect >= 1 ? fit : fit * aspect;
 	const height = aspect >= 1 ? fit / aspect : fit;
 
+	const glyph = ART_GLYPH[kind];
 	const [fillWidth, fillHeight] = ART_FILL[kind] ?? [1, 1];
-	const ringWidth = width * fillWidth + RING_THICKNESS * 2;
-	const ringHeight = height * fillHeight + RING_THICKNESS * 2;
-	const shortSide = Math.min(ringWidth, ringHeight);
-	const borderRadius = kind === "web" ? shortSide / 2 : Math.round(shortSide * (RING_RADIUS[kind] ?? 0.2));
+	const artWidth = glyph ? glyph.w * fit : width * fillWidth;
+	const artHeight = glyph ? (glyph.h ? glyph.h * fit : artWidth / glyph.aspect) : height * fillHeight;
+	const offsetX = (glyph?.dx ?? 0) * fit;
+	const offsetY = (glyph?.dy ?? 0) * fit;
+	const ringWidth = artWidth + RING_THICKNESS * 2;
+	const ringHeight = artHeight + RING_THICKNESS * 2;
+	const plate = plateShapes(kind, artWidth, artHeight, ringWidth, ringHeight);
 
 	const style = ReactNative.StyleSheet.flatten(original.props.style) ?? {};
-	const shift = inUserBar ? USER_BAR_SHIFT : 0;
-	const right = (typeof style.right === "number" ? style.right : -3) + box / 2 - ringWidth / 2 + shift;
-	const bottom = (typeof style.bottom === "number" ? style.bottom : -3) + box / 2 - ringHeight / 2 + shift;
+	const [shiftX, shiftY] = CONTEXT_SHIFT[location] ?? [0, 0];
+	const right = (typeof style.right === "number" ? style.right : -3) + box / 2 - ringWidth / 2 + shiftX;
+	const bottom = (typeof style.bottom === "number" ? style.bottom : -3) + box / 2 - ringHeight / 2 + shiftY;
 
-	return jsx(ReactNative.View, {
-		style: {
-			position: "absolute",
-			right,
-			bottom,
-			width: ringWidth,
-			height: ringHeight,
-			borderRadius,
-			alignItems: "center",
-			justifyContent: "center",
-			backgroundColor: style.backgroundColor ?? (inUserBar ? "#101014" : "#242429"),
-		},
-		children: jsx(PlatformIcon, {
-			platform,
-			color: statusColor(statuses[platform], settings.cache?.fallbackColors),
-			width,
-			height,
-			forDot: true,
-		}),
+	const backgroundColor = style.backgroundColor ?? surfaceColor(location);
+
+	return jsxs(ReactNative.View, {
+		style: { position: "absolute", right, bottom, width: ringWidth, height: ringHeight },
+		children: [
+			...plate.map((shape, i) => jsx(ReactNative.View, {
+				style: { position: "absolute", backgroundColor, ...shape, left: shape.left + offsetX, top: shape.top + offsetY },
+			}, i)),
+			jsx(ReactNative.View, {
+				style: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center" },
+				children: jsx(PlatformIcon, {
+					platform,
+					color: statusColor(statuses[platform], settings.cache?.fallbackColors),
+					width,
+					height,
+					forDot: true,
+				}),
+			}, "icon"),
+		],
 	});
 }
 
@@ -264,11 +410,11 @@ export default plugin({
 			if (!target) return;
 			cleanup(patcher.after(target.parent, target.key, (result) => {
 				safely(() => {
-					if (!settings.cache?.dmTopBar || result?.type?.type?.name !== "PrivateChannelHeader") return;
+					if (result?.type?.type?.name !== "PrivateChannelHeader") return;
 					cleanup(patcher.after(result.type, "type", (header) => {
 						safely(() => {
 							const userId = utils.tree.findInTree(header, hasUser, WALK)?.props?.user?.id;
-							if (!userId) return;
+							if (!userId || !inlineIconsAllowed("dmTopBar")) return;
 
 							const container = utils.tree.findInTree(header, (n) => n?.key === "DMTabsV2HeaderIcons", WALK);
 							if (container) return void (container.props.children = jsx(StatusIcons, { userId }));
@@ -311,7 +457,7 @@ export default plugin({
 									cleanup(patcher.after(name, "type", (c) => {
 										safely(() => {
 											const userId = name.props?.user?.id;
-											if (userId && settings.cache?.profileUsername) c?.props?.children?.push(jsx(StatusIcons, { userId }, "UserProfileIcons"));
+											if (userId && inlineIconsAllowed("profileUsername")) c?.props?.children?.push(jsx(StatusIcons, { userId }, "UserProfileIcons"));
 										});
 										return c;
 									}));
@@ -332,7 +478,7 @@ export default plugin({
 				safely(() => {
 					const user = args[0]?.user;
 					const children = result.props?.children?.props?.children?.[0]?.props?.children;
-					if (user?.id && Array.isArray(children) && settings.cache?.profileUsername) {
+					if (user?.id && Array.isArray(children) && inlineIconsAllowed("profileUsername")) {
 						if (children.some((c) => c?.key === "DisplayNameIcons")) return;
 						children.push(jsx(StatusIcons, { userId: user.id }, "DisplayNameIcons"));
 					}
@@ -348,11 +494,11 @@ export default plugin({
 				const result = orig(props);
 				safely(() => {
 					const user = props?.user;
-					if (!settings.cache?.userList || !user?.id) return;
+					if (!user?.id || !inlineIconsAllowed("userList")) return;
 					if (utils.tree.findInTree(result?.props?.label, (n) => n?.key === "TabsV2MemberListStatusIconsView", WALK)) return;
 
 					result.props.label = jsxs(ReactNative.View, {
-						style: { justifyContent: settings.cache?.oldUserListIcons ? "space-between" : "flex-start", flexDirection: "row", alignItems: "center" },
+						style: { justifyContent: "flex-start", flexDirection: "row", alignItems: "center" },
 						children: [
 							result.props.label,
 							jsx(ReactNative.View, { style: { flexDirection: "row" }, children: jsx(StatusIcons, { userId: user.id }) }, "TabsV2MemberListStatusIconsView"),
@@ -360,8 +506,8 @@ export default plugin({
 					}, "TabsV2MemberListStatusIconsView");
 				});
 				return result;
-			}));
-		}, { max: Infinity }));
+			}, { max: Infinity }));
+		}));
 
 		cleanup(getModules(withExactName("MessagesItemChannelContent"), (mod) => {
 			const target = patchTarget(mod);
@@ -369,7 +515,7 @@ export default plugin({
 			cleanup(patcher.instead(target.parent, target.key, ([props], orig) => {
 				const result = orig(props);
 				safely(() => {
-					if (!settings.cache?.userList || props?.channel?.recipients?.length !== 1) return;
+					if (props?.channel?.recipients?.length !== 1 || !inlineIconsAllowed("userList")) return;
 					const recipientId = props.channel.recipients[0];
 					const titleNode = utils.tree.findInTree(result, (n) => n?.props?.children?.[0]?.props?.variant?.includes?.("channel-title"), WALK);
 					if (titleNode && !utils.tree.findInTree(titleNode, (n) => n?.key === "TabsV2RedesignDMListIcons", WALK)) {
@@ -395,28 +541,25 @@ export default plugin({
 
 					const index = kids.findIndex((c) => (c?.type?.name ?? c?.type?.displayName) === "Status");
 					if (index === -1) return result;
-					const original = kids[index];
 
 					const userId = props?.user?.id ?? kids.find((c) => c?.props?.user?.id)?.props?.user?.id;
 					if (!userId) return result;
 
-					const hasIcon = !!pickDotPlatform(getStatuses(userId) ?? {});
-					const inUserBar = typeof props?.size === "string" && props.size.startsWith("youBar");
+					const original = kids[index];
 					const children = kids.map((kid, i) => {
-						if (i === index) return jsx(StatusDot, { userId, original, inUserBar }, original.key ?? "StatusDot");
-						if (hasIcon && kid?.props?.cutout != null) return { ...kid, props: { ...kid.props, cutout: undefined } };
+						if (i === index) return jsx(StatusDot, { userId, original, size: props?.size }, original.key ?? "StatusDot");
+						if (kid?.props?.cutout != null) return { ...kid, props: { ...kid.props, cutout: undefined } };
 						return kid;
 					});
 					return { ...result, props: { ...result.props, children } };
 				} catch {
 					return result;
 				}
-			}));
-		}, { max: Infinity }));
+			}, { max: Infinity }));
+		}));
 	},
 	stop() {
 		this.requireReload();
 	},
 	SettingsComponent: SettingsPage,
 });
-						   
