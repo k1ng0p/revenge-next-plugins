@@ -546,9 +546,11 @@ export default plugin({
 					if (!userId) return result;
 
 					const original = kids[index];
+					const statuses = getStatuses(userId) ?? {};
+					const hasIcon = dotAllowedForContext(resolveContext(props?.size)) && !!pickDotPlatform(statuses);
 					const children = kids.map((kid, i) => {
 						if (i === index) return jsx(StatusDot, { userId, original, size: props?.size }, original.key ?? "StatusDot");
-						if (kid?.props?.cutout != null) return { ...kid, props: { ...kid.props, cutout: undefined } };
+						if (hasIcon && kid?.props?.cutout != null) return { ...kid, props: { ...kid.props, cutout: undefined } };
 						return kid;
 					});
 					return { ...result, props: { ...result.props, children } };
