@@ -147,11 +147,19 @@ function statusColor(status, useFallback) {
 	return FALLBACK_COLORS[status] ?? FALLBACK_COLORS.offline;
 }
 
-const SURFACE_TOKEN_CANDIDATES = ["BACKGROUND_SECONDARY", "BACKGROUND_MOBILE_PRIMARY", "BACKGROUND_PRIMARY", "CARD_PRIMARY_BG"];
-const SURFACE_FALLBACK = { dmHeader: "#313338", dmList: "#2b2d31", memberList: "#2b2d31", profile: "#111214", youBar: "#111214" };
+const SURFACE_TOKEN_CANDIDATES_BY_CONTEXT = {
+	profile: ["BACKGROUND_FLOATING", "BACKGROUND_PRIMARY", "BACKGROUND_SECONDARY"],
+	youBar: ["BACKGROUND_MOBILE_PRIMARY", "BACKGROUND_PRIMARY", "BACKGROUND_SECONDARY"],
+	memberList: ["BACKGROUND_SECONDARY", "BACKGROUND_MOBILE_PRIMARY", "BACKGROUND_PRIMARY"],
+	dmList: ["BACKGROUND_MOBILE_PRIMARY", "BACKGROUND_SECONDARY", "BACKGROUND_PRIMARY"],
+	dmHeader: ["BACKGROUND_MOBILE_PRIMARY", "BACKGROUND_PRIMARY", "BACKGROUND_SECONDARY"],
+	other: ["BACKGROUND_SECONDARY", "BACKGROUND_MOBILE_PRIMARY", "BACKGROUND_PRIMARY"],
+};
+const SURFACE_FALLBACK = { dmHeader: "#313338", dmList: "#232428", memberList: "#2b2d31", profile: "#111214", youBar: "#0e0e10" };
 
 function surfaceColor(context) {
-	for (const name of SURFACE_TOKEN_CANDIDATES) {
+	const candidates = SURFACE_TOKEN_CANDIDATES_BY_CONTEXT[context] ?? SURFACE_TOKEN_CANDIDATES_BY_CONTEXT.other;
+	for (const name of candidates) {
 		try {
 			const token = revenge.discord.common.Tokens?.colors?.[name];
 			const v = typeof token === "string" ? token : token?.resolve?.();
@@ -181,12 +189,19 @@ function normalizePlatform(p) {
 	return p;
 }
 
+const warnedMissingAssets = new Set();
+
 function findAsset(platform, forDot) {
 	const key = normalizePlatform(platform);
 	const names = (forDot && DOT_ASSET_NAMES[key]) || ASSET_NAMES[key] || [];
 	for (const name of names) {
 		const id = revenge.assets.getAssetIdByName(name, "png");
 		if (id) return id;
+	}
+	const warnKey = `${key}:${forDot ? "dot" : "inline"}`;
+	if (!warnedMissingAssets.has(warnKey)) {
+		warnedMissingAssets.add(warnKey);
+		console.warn(`[Platform Indicators] no icon asset found for "${platform}" (tried: ${names.join(", ") || "none"}), falling back to a plain dot`);
 	}
 }
 
@@ -223,12 +238,14 @@ const DOT_PRIORITY = ["desktop", "mobile", "web", "embedded", "vr"];
 const FALLBACK_ASPECT = { mobile: 0.62, vr: 1.75, desktop: 1.15, web: 1, embedded: 1.3 };
 const ART_FILL = { mobile: [0.92, 0.94], web: [0.84, 0.84] };
 const ART_GLYPH = {
-	desktop: { w: 0.78, h: 0.757, dx: -0.04, dy: 0.038 },
-	embedded: { w: 0.86, h: 0.73, dx: -0.028, dy: -0.02 },
+	desktop: { w: 0.78, h: 0.757, dx: -0.04, dy: 0.01 },
+	embedded: { w: 0.82, h: 0.79, dx: -0.028, dy: -0.02 },
 	vr: { w: 0.96, aspect: 1.58, dx: 0, dy: 0 },
 };
 const RING_THICKNESS = 2;
 const CONTEXT_SHIFT = { youBar: [0, 3], memberList: [0, 3], profile: [0, 3] };
+const PLATFORM_SHIFT = { desktop: [0, 2] };
+const PLATFORM_LIST_SHIFT = { desktop: -2, embedded: -2 };
 const CONTEXT_SCALE = { profile: 1.3 };
 
 function pickDotPlatform(statuses) {
@@ -368,7 +385,12 @@ function StatusDot({ userId, original, size }) {
 	const plate = plateShapes(kind, artWidth, artHeight, ringWidth, ringHeight);
 
 	const style = ReactNative.StyleSheet.flatten(original.props.style) ?? {};
-	const [shiftX, shiftY] = CONTEXT_SHIFT[location] ?? [0, 0];
+	const [ctxShiftX, ctxShiftY] = CONTEXT_SHIFT[location] ?? [0, 0];
+	const [platShiftX, platShiftY] = PLATFORM_SHIFT[kind] ?? [0, 0];
+	const inListContext = location === "memberList" || location === "dmList";
+	const listExtra = inListContext ? (PLATFORM_LIST_SHIFT[kind] ?? 0) : 0;
+	const shiftX = ctxShiftX + platShiftX;
+	const shiftY = ctxShiftY + platShiftY + listExtra;
 	const right = (typeof style.right === "number" ? style.right : -3) + box / 2 - ringWidth / 2 + shiftX;
 	const bottom = (typeof style.bottom === "number" ? style.bottom : -3) + box / 2 - ringHeight / 2 + shiftY;
 
@@ -381,7 +403,7 @@ function StatusDot({ userId, original, size }) {
 				style: { position: "absolute", backgroundColor, ...shape, left: shape.left + offsetX, top: shape.top + offsetY },
 			}, i)),
 			jsx(ReactNative.View, {
-				style: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center" },
+				style: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center", transform: [{ translateX: offsetX }, { translateY: offsetY }] },
 				children: jsx(PlatformIcon, {
 					platform,
 					color: statusColor(statuses[platform], settings.cache?.fallbackColors),
