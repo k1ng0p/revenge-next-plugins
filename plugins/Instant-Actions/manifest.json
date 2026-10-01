@@ -5,7 +5,7 @@
 	"description": "No more 'Are you sure?' Skips deletes, leaves, blocks, and other prompts. Toggle each one individually.",
 	"icon": "FlashIcon",
 	"author": "k1ng_op",
-	"version": "1.2.1",
+	"version": "1.2.2",
 	"dependencies": {
 		"revenge.api": {
 			"version": ">=1 <2"
