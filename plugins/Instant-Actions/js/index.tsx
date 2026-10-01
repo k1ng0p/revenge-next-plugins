@@ -12,6 +12,7 @@ const DEFAULTS = {
 	autoConfirmIgnore: false,
 	autoConfirmCancelRequest: false,
 	autoConfirmVoiceCall: false,
+	autoConfirmPin: false,
 	debug: false,
 };
 
@@ -42,6 +43,7 @@ const RULES: { on: keyof Settings; test: (key: string, title: string, content: s
 		rest: (p) => p?.user?.id && getHttp()?.del({ url: `/users/@me/relationships/${p.user.id}` }),
 	},
 	{ on: "autoConfirmVoiceCall", test: (k) => k === "start-voice-call" },
+	{ on: "autoConfirmPin", test: (_, t) => t === "Pin Message" || t === "Unpin Message" },
 ];
 
 // action sheets skip openAlert, matched by openLazy's key instead
@@ -58,6 +60,7 @@ const GROUPS: { title: string; rows: [key: keyof Settings, label: string, sub: s
 			["autoConfirmEmbed", "Embeds", "Deletes embeds without confirmation", "EmbedIcon"],
 			["autoConfirmAttachment", "Attachments", "Removes attachments without confirmation", "AttachmentIcon"],
 			["autoConfirmMaskedLink", "Masked Links", "Opens links without the \"Leaving Discord\" warning", "LinkIcon"],
+			["autoConfirmPin", "Pin/Unpin Messages", "Removes confirmation prompt when pinning or unpinning messages.", "PinIcon"],
 		],
 	},
 	{
