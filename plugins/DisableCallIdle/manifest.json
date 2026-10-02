@@ -1,0 +1,20 @@
+{
+	"format": 1,
+	"id": "k1ngop.disable-call-idle",
+	"name": "DisableCallIdle",
+	"description": "Prevents automatic disconnects from idle DM calls.",
+	"author": "k1ng_op",
+	"icon": "disconnect",
+	"version": "1.0.7",
+	"dependencies": {
+		"revenge.api": {
+			"version": ">=1 <2"
+		},
+		"discord": {
+			"version": "*"
+		}
+	},
+	"dist": {
+		"script": "index.js"
+	}
+}
