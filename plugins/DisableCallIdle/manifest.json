@@ -1,7 +1,7 @@
 {
 	"format": 1,
 	"id": "k1ngop.disable-call-idle",
-	"name": "DisableCallIdle",
+	"name": "Disable Call Idle",
 	"description": "Prevents automatic disconnects from idle DM calls.",
 	"author": "k1ng_op",
 	"icon": "disconnect",
