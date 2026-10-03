@@ -11,11 +11,12 @@ const REPOS = [
 
 const KEY = 'RepositoryBrowser'
 const DAY = 864e5
+const SORTS = { name: 'A-Z', updated: 'Recently updated', newest: 'Newest', installed: 'Installed first' } as Record<string, string>
 const cache = new Map<string, any>()
 let store: any
 const h = (...a: any[]) => (revenge.react.React.createElement as any)(...a)
 const call = (n: string, a: any[]) => (revenge.modules.native.callNativeMethod as any)(n, a)
-const alert = (m: string) => modal('Repository Browser', m, B => [h(B, { key: 'o', text: 'OK', variant: 'secondary' })])
+const alert = (m: string) => modal('Plugin Browser', m, B => [h(B, { key: 'o', text: 'OK', variant: 'secondary' })])
 const asset = (n?: string) => (n ? revenge.assets.getAssetIdByName(n) : undefined)
 const slash = (u: string) => u.replace(/\/*$/, '/')
 
@@ -64,8 +65,8 @@ async function load(url: string) {
 	}
 }
 
-const summarize = (label: string, items: string[]) =>
-	items.length ? `${label}: ${items.slice(0, 2).join(', ')}${items.length > 2 ? ` +${items.length - 2} more` : ''}` : ''
+const save = (patch: Record<string, any>) =>
+	store.set({ seen: store.cache?.seen ?? {}, ack: store.cache?.ack ?? 0, ...patch }, true)
 
 async function checkUpdates() {
 	await Promise.all(REPOS.map(r => load(r.url)))
@@ -81,31 +82,45 @@ async function checkUpdates() {
 		if (old?.sig === sig) continue
 		dirty = true
 		if (!old) {
-			seen[r.url] = { sig, versions: now, at: 0, changes: '', news: {} }
+			seen[r.url] = { sig, versions: now, news: {}, updates: {}, meta: {} }
 			continue
 		}
-		const updated: string[] = []
-		const news: Record<string, number> = { ...old.news }
+		const stamp = Date.now()
+		const news = { ...old.news }
+		const updates = { ...old.updates }
+		const meta = { ...old.meta }
 		for (const p of c.plugins) {
 			const was = old.versions[p.id]
-			if (was === undefined) news[p.id] = Date.now()
-			else if (was !== now[p.id]) updated.push(`${p.name} ${was} to ${now[p.id]}`)
+			if (was === undefined) {
+				news[p.id] = stamp
+				meta[p.id] = { ...meta[p.id], added: stamp }
+			} else if (was !== now[p.id]) {
+				updates[p.id] = { at: stamp, from: was, to: now[p.id] }
+				meta[p.id] = { ...meta[p.id], updated: stamp }
+			}
 		}
-		const removed = Object.keys(old.versions).filter(id => !(id in now))
-		for (const id of Object.keys(news)) if (!(id in now)) delete news[id]
-		const changes = [summarize('Updated', updated), summarize('Removed', removed)].filter(Boolean).join('\n')
-		seen[r.url] = { sig, versions: now, at: changes ? Date.now() : old.at, changes: changes || old.changes, news }
+		for (const id of Object.keys(old.versions))
+			if (!(id in now)) {
+				delete news[id]
+				delete updates[id]
+				delete meta[id]
+			}
+		seen[r.url] = { sig, versions: now, news, updates, meta }
 	}
-	if (dirty) await store.set({ seen }, true)
+	if (dirty) await save({ seen })
 }
 
-function dismissNew(url: string, id: string) {
-	const entry = store.cache?.seen?.[url]
-	if (!entry?.news?.[id]) return
-	const news = { ...entry.news }
-	delete news[id]
-	return store.set({ seen: { ...store.cache.seen, [url]: { ...entry, news } } }, true)
+function dismiss(kind: 'news' | 'updates', url: string, id: string) {
+	const seen = store.cache?.seen ?? {}
+	const entry = seen[url]
+	if (!entry?.[kind]?.[id]) return
+	const next = { ...entry[kind] }
+	delete next[id]
+	return save({ seen: { ...seen, [url]: { ...entry, [kind]: next } } })
 }
+
+const unreadCount = (seen: Record<string, any>, ack: number) =>
+	Object.values(seen).reduce((sum: number, r: any) => sum + Object.values<number>(r.news ?? {}).filter(at => at > ack).length, 0)
 
 const repoList = (): Promise<any[]> => call('revenge.plugins.repos.list', [])
 
@@ -143,7 +158,7 @@ const reload = () => call('revenge.app.reload', [])
 const modal = (title: string, content: string, actions: (m: any) => any[], done?: () => void) => {
 	const { AlertModal } = revenge.discord.design.Design
 	revenge.discord.actions.AlertActionCreators.openAlert(
-		`repository-browser-${title}`,
+		`plugin-browser-${title}`,
 		h(AlertModal, { title, content: h(revenge.discord.design.Design.Text, { color: 'text-default' }, content), actions: h(revenge.react.React.Fragment, null, ...actions(revenge.discord.design.Design.AlertActionButton)) }),
 		done,
 	)
@@ -214,63 +229,117 @@ const flags = new Map<string, boolean>()
 function Browser() {
 	const { React } = revenge.react
 	const { ScrollView, View, BackHandler, Linking } = revenge.react.ReactNative
-	const { Stack, TableRow, TableRowGroup, TableSwitchRow, Button, IconButton, Card, Text } = revenge.discord.design.Design
-	const { FormSwitch } = revenge.components
+	const { Stack, TableRow, TableRowGroup, TableSwitchRow, TableRadioGroup, TableRadioRow, Button, IconButton, Card, Text } = revenge.discord.design.Design
+	const { FormSwitch, SearchInput } = revenge.components
 	const seen = store.use()?.seen ?? {}
 	const [open, setOpen] = React.useState<(typeof REPOS)[number] | null>(null)
 	const [st, setSt] = React.useState<Awaited<ReturnType<typeof readState>> | null>(null)
 	const [busy, setBusy] = React.useState('')
+	const [query, setQuery] = React.useState('')
+	const [sort, setSort] = React.useState('name')
+	const [sortOpen, setSortOpen] = React.useState(false)
 	const [, update] = React.useReducer((n: number) => n + 1, 0)
 
 	const sync = () => readState().then(setSt).catch(() => {})
+	const openRepo = (e: (typeof REPOS)[number]) => {
+		setQuery('')
+		setSortOpen(false)
+		setOpen(e)
+	}
+	const closeRepo = () => {
+		setQuery('')
+		setSortOpen(false)
+		setOpen(null)
+	}
 
 	React.useEffect(() => {
 		let alive = true
+		save({ ack: Date.now() })
 		sync()
-		checkUpdates().then(() => alive && update())
+		checkUpdates().then(() => {
+			if (!alive) return
+			save({ ack: Date.now() })
+			update()
+		})
 		return () => void (alive = false)
 	}, [])
 
 	React.useEffect(() => {
 		if (!open) return
-		const sub = BackHandler.addEventListener('hardwareBackPress', () => (setOpen(null), true))
+		const sub = BackHandler.addEventListener('hardwareBackPress', () => (closeRepo(), true))
 		return () => sub.remove()
 	}, [open])
 
 	const isOn = (id: string) => flags.get(id) ?? st?.enabled[id]?.enabled ?? false
 	const added = (url: string) => st?.repos.find(r => !r.internal && slash(r.url) === slash(url))
 
-	const plugin = (e: (typeof REPOS)[number], p: any) => {
+	const q = query.trim().toLowerCase()
+	const matches = (...fields: any[]) => !q || fields.some(f => typeof f === 'string' && f.toLowerCase().includes(q))
+	const byName = (a: string, b: string) => a.localeCompare(b)
+	const repoName = (e: (typeof REPOS)[number]) => cache.get(e.url)?.name ?? e.url
+
+	const pluginRank = (e: (typeof REPOS)[number], p: any) => {
+		const m = seen[e.url]?.meta?.[p.id]
+		if (sort === 'updated') return m?.updated ?? 0
+		if (sort === 'newest') return m?.added ?? 0
+		if (sort === 'installed') return st?.installed.has(p.id) ? 1 : 0
+		return 0
+	}
+
+	const repoRank = (e: (typeof REPOS)[number]) => {
+		const metas = Object.values<any>(seen[e.url]?.meta ?? {})
+		if (sort === 'updated') return Math.max(0, ...metas.map(m => Math.max(m.updated ?? 0, m.added ?? 0)))
+		if (sort === 'newest') return Math.max(0, ...metas.map(m => m.added ?? 0))
+		if (sort === 'installed')
+			return (cache.get(e.url)?.plugins ?? []).filter((p: any) => st?.installed.has(p.id)).length * 2 + (added(e.url)?.enabled ? 1 : 0)
+		return 0
+	}
+
+	const sortPlugins = (items: { e: (typeof REPOS)[number]; p: any }[]) =>
+		[...items].sort((a, b) => pluginRank(b.e, b.p) - pluginRank(a.e, a.p) || byName(a.p.name, b.p.name))
+
+	const plugin = (e: (typeof REPOS)[number], p: any, origin?: string) => {
 		const have = st?.installed.get(p.id)
+		const repo = added(e.url)
 		const on = isOn(p.id)
 		const live = on && !flags.has(p.id) && !st?.enabled[p.id]?.pendingReload
-		const actions = have
-			? [
-					h(IconButton, { key: 'rm', size: 'sm', variant: 'secondary', icon: asset('TrashIcon'), onPress: () => uninstall(p).then(ok => ok && sync()) }),
-					have.settings && h(IconButton, { key: 'cfg', size: 'sm', variant: 'secondary', icon: asset('SettingsIcon'), disabled: !live, onPress: () => openSettings(p.id) }),
-					h(FormSwitch, { key: 'sw', value: on, onValueChange: (v: boolean) => toggle(p.id, v).then(ok => ok && (flags.set(p.id, v), update())) }),
-				]
-			: added(e.url)?.enabled
+		const actions = !st
+			? []
+			: have
 				? [
-					h(Button, {
-						key: 'in',
-						text: 'Install',
-						size: 'sm',
-						icon: asset('DownloadIcon'),
-						loading: busy === p.id,
-						onPress: async () => {
-							setBusy(p.id)
-							await install(e.url, p)
-							setBusy('')
-							sync()
-						},
-					}),
-				]
-				: []
+						h(IconButton, { key: 'rm', size: 'sm', variant: 'secondary', icon: asset('TrashIcon'), onPress: () => uninstall(p).then(ok => ok && sync()) }),
+						have.settings && h(IconButton, { key: 'cfg', size: 'sm', variant: 'secondary', icon: asset('SettingsIcon'), disabled: !live, onPress: () => openSettings(p.id) }),
+						h(FormSwitch, { key: 'sw', value: on, onValueChange: (v: boolean) => toggle(p.id, v).then(ok => ok && (flags.set(p.id, v), update())) }),
+					]
+				: repo?.enabled
+					? [
+							h(Button, {
+								key: 'in',
+								text: 'Install',
+								size: 'sm',
+								icon: asset('DownloadIcon'),
+								loading: busy === p.id,
+								onPress: async () => {
+									setBusy(p.id)
+									await install(e.url, p)
+									setBusy('')
+									sync()
+								},
+							}),
+						]
+					: [
+							h(Button, {
+								key: 'repo',
+								text: origin ? 'Open repo' : repo ? 'Enable repo' : 'Add repo',
+								size: 'sm',
+								variant: 'secondary',
+								onPress: () => (origin ? openRepo(e) : putRepos(slash(e.url), true).then(sync).catch((err: any) => alert(err?.message ?? String(err)))),
+							}),
+						]
 		const version = have?.version ?? p.version
 		return h(
 			Card,
-			{ key: p.id, style: { paddingVertical: 12, paddingHorizontal: 12 } },
+			{ key: `${e.url}#${p.id}`, style: { paddingVertical: 12, paddingHorizontal: 12 } },
 			h(
 				View,
 				{ style: { width: '100%' } },
@@ -293,9 +362,85 @@ function Browser() {
 					View,
 					{ style: { paddingLeft: 32, marginTop: 6 } },
 					h(Text, { color: 'text-muted', variant: 'heading-md/medium' }, `by ${p.author ?? 'unknown'}${version ? ` \u2022 ${version}` : ''}`),
+					origin && h(Text, { color: 'text-muted', variant: 'text-sm/medium', style: { marginTop: 2 } }, `from ${origin}${repo?.enabled ? '' : ' \u2022 repository not added'}`),
 					h(Text, { variant: 'text-md/medium', style: { marginTop: 4 } }, p.description),
 				),
 			),
+		)
+	}
+
+	const controls = () =>
+		h(
+			View,
+			{ key: 'controls', style: { flexDirection: 'row', alignItems: 'center' } },
+			h(View, { style: { flex: 1 } }, h(SearchInput, { value: query, onChange: setQuery, isClearable: true, placeholder: open ? 'Search this repository' : 'Search plugins and repositories' })),
+			h(
+				View,
+				{ style: { marginLeft: 8 } },
+				h(IconButton, { size: 'md', variant: sortOpen ? 'primary' : 'secondary', icon: asset('FiltersHorizontalIcon'), onPress: () => setSortOpen((v: boolean) => !v) }),
+			),
+		)
+
+	const sortUi = (ranks: number[]) => [
+		h(
+			Text,
+			{ key: 'sorted', variant: 'text-sm/medium', color: 'text-muted' },
+			`Sorted by ${SORTS[sort]}${(sort === 'updated' || sort === 'newest') && !ranks.some(Boolean) ? ' (no history yet, showing A-Z)' : ''}`,
+		),
+		sortOpen &&
+			h(
+				TableRadioGroup,
+				{ key: 'sort', title: 'Sort by', defaultValue: sort, onChange: (v: string) => (setSort(v), setSortOpen(false)) },
+				Object.entries(SORTS).map(([k, label]) => h(TableRadioRow, { key: k, label, value: k })),
+			),
+	]
+
+	const warning = () => {
+		const source = asset('WarningIcon') ?? asset('CircleExclamationPointIcon')
+		return h(
+			View,
+			{ key: 'warning', style: { flexDirection: 'row', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#F23F42', backgroundColor: 'rgba(242, 63, 66, 0.12)' } },
+			source && h(View, { style: { marginRight: 10, paddingTop: 2 } }, h(TableRow.Icon, { source })),
+			h(
+				View,
+				{ style: { flex: 1 } },
+				h(Text, { variant: 'heading-md/bold', style: { color: '#FF7B7E' } }, 'Unofficial plugins and repositories'),
+				h(
+					Text,
+					{ variant: 'text-sm/medium', style: { marginTop: 4 } },
+					'Plugins installed from unofficial sources can run unverified code in this app without your awareness. Check the source first, and install at your own risk.',
+				),
+			),
+		)
+	}
+
+	const feed = (kind: 'news' | 'updates', title: string) => {
+		const items = REPOS.flatMap(e =>
+			Object.entries<any>(seen[e.url]?.[kind] ?? {}).map(([id, v]) => ({ e, id, v, at: kind === 'news' ? (v as number) : v.at })),
+		)
+			.filter(i => (kind === 'news' || (Date.now() - i.at < DAY && !seen[i.e.url].news?.[i.id])) && cache.get(i.e.url)?.plugins.some((p: any) => p.id === i.id))
+			.sort((a, b) => b.at - a.at)
+		if (!items.length) return null
+		return h(
+			TableRowGroup,
+			{ key: kind, title },
+			items.map(({ e, id, v, at }) => {
+				const r = cache.get(e.url)
+				const p = r.plugins.find((x: any) => x.id === id)
+				const detail = kind === 'news' ? `New in ${r.name}` : `Updated in ${r.name}\n${v.from} to ${v.to}`
+				return h(TableRow, {
+					key: `${kind}:${e.url}#${id}`,
+					icon: icon(p.icon, 'PuzzlePieceIcon'),
+					label: p.name,
+					subLabel: `${detail}\n${ago(at)}`,
+					subLabelLineClamp: 3,
+					arrow: true,
+					onPress: () => {
+						dismiss(kind, e.url, id)
+						openRepo(e)
+					},
+				})
+			}),
 		)
 	}
 
@@ -304,9 +449,10 @@ function Browser() {
 		const r = cache.get(open.url)
 		const n = r?.plugins.length ?? 0
 		const repo = added(open.url)
+		const visible = sortPlugins((r?.plugins ?? []).filter((p: any) => matches(p.name, p.id, p.description, p.author)).map((p: any) => ({ e: open, p })))
 		body = [
 			h(TableRowGroup, { key: 'info', title: r?.name ?? open.url, description: r?.description }, [
-				h(TableRow, { key: 'back', label: 'Back', icon: icon('ArrowLargeLeftIcon'), onPress: () => setOpen(null) }),
+				h(TableRow, { key: 'back', label: 'Back', icon: icon('ArrowLargeLeftIcon'), onPress: closeRepo }),
 				repo
 					? h(TableSwitchRow, {
 							key: 'repo',
@@ -341,91 +487,95 @@ function Browser() {
 						{ key: 'plugins', spacing: 12 },
 						h(Text, { variant: 'text-md/semibold', color: 'text-muted' }, `This repository comes with ${n} plugin${n === 1 ? '' : 's'}`),
 						!repo?.enabled && h(Text, { key: 'hint', variant: 'text-sm/medium', color: 'text-muted' }, 'Add this repository to Revenge to install its plugins.'),
-						...(r?.plugins.map((p: any) => plugin(open, p)) ?? []),
+						controls(),
+						...sortUi(visible.map(({ e, p }) => pluginRank(e, p))),
+						q && !visible.length && h(Text, { key: 'none', variant: 'text-md/medium' }, `No plugins match "${query.trim()}".`),
+						...visible.map(({ p }) => plugin(open, p)),
 					),
 		]
 	} else {
-		const recent = REPOS.filter(e => seen[e.url]?.at && seen[e.url].changes && Date.now() - seen[e.url].at < DAY).sort((a, b) => seen[b.url].at - seen[a.url].at)
-		const fresh = REPOS.flatMap(e => Object.entries<number>(seen[e.url]?.news ?? {}).map(([id, at]) => ({ e, id, at })))
-			.filter(n => cache.get(n.e.url)?.plugins.some((p: any) => p.id === n.id))
-			.sort((a, b) => b.at - a.at)
+		const hits = q
+			? sortPlugins(REPOS.flatMap(e => (cache.get(e.url)?.plugins ?? []).filter((p: any) => matches(p.name, p.id, p.description, p.author)).map((p: any) => ({ e, p }))))
+			: []
+		const repos = REPOS.filter(e => matches(repoName(e), cache.get(e.url)?.description, e.url)).sort(
+			(a, b) => repoRank(b) - repoRank(a) || byName(repoName(a), repoName(b)),
+		)
 		body = [
-			fresh.length
-				? h(
-						TableRowGroup,
-						{ key: 'new', title: 'New plugins' },
-						fresh.map(({ e, id, at }) => {
-							const r = cache.get(e.url)
-							const p = r.plugins.find((x: any) => x.id === id)
-							return h(TableRow, {
-								key: `${e.url}#${id}`,
-								icon: icon(p.icon, 'PuzzlePieceIcon'),
-								label: p.name,
-								subLabel: `New in ${r.name}\n${ago(at)}`,
-								subLabelLineClamp: 3,
-								arrow: true,
-								onPress: () => {
-									dismissNew(e.url, id)
-									setOpen(e)
-								},
-							})
-						}),
-					)
+			controls(),
+			warning(),
+			...sortUi(q ? hits.map(({ e, p }) => pluginRank(e, p)) : repos.map(repoRank)),
+			q
+				? hits.length
+					? h(
+							Stack,
+							{ key: 'hits', spacing: 12 },
+							h(Text, { variant: 'text-md/semibold', color: 'text-muted' }, `${hits.length} plugin${hits.length === 1 ? '' : 's'} found`),
+							...hits.map(({ e, p }) => plugin(e, p, repoName(e))),
+						)
+					: h(Text, { key: 'none', variant: 'text-md/medium' }, `No plugins match "${query.trim()}".`)
 				: null,
-			recent.length
+			q ? null : feed('news', 'New plugins'),
+			q ? null : feed('updates', 'Recently updated'),
+			repos.length
 				? h(
 						TableRowGroup,
-						{ key: 'recent', title: 'Recently updated' },
-						recent.map(e => {
+						{ key: 'all', title: 'Repositories', description: q ? undefined : `${REPOS.length} repositories` },
+						repos.map(e => {
 							const r = cache.get(e.url)
+							const count = r && !r.err ? String(r.plugins.length) : ''
 							return h(TableRow, {
 								key: e.url,
 								icon: icon(repoIcon(r, e)),
 								label: r?.name ?? e.url,
-								subLabel: `${seen[e.url].changes}\n${ago(seen[e.url].at)}`,
-								subLabelLineClamp: 5,
+								subLabel: r ? (r.err ? `Failed: ${r.err}` : r.description || e.url) : 'Loading...',
+								labelLineClamp: 1,
+								subLabelLineClamp: 2,
+								trailing: count && h(TableRow.TrailingText, { text: `Plugins · ${count}` }),
 								arrow: true,
-								onPress: () => setOpen(e),
+								onPress: () => openRepo(e),
 							})
 						}),
 					)
 				: null,
-			h(
-				TableRowGroup,
-				{ key: 'all', title: 'Repositories', description: `${REPOS.length} repositories` },
-				REPOS.map(e => {
-					const r = cache.get(e.url)
-					const count = r && !r.err ? String(r.plugins.length) : ''
-					return h(TableRow, {
-						key: e.url,
-						icon: icon(repoIcon(r, e)),
-						label: r?.name ?? e.url,
-						subLabel: r ? (r.err ? `Failed: ${r.err}` : r.description || e.url) : 'Loading...',
-						labelLineClamp: 1,
-						subLabelLineClamp: 2,
-						trailing: count && h(TableRow.TrailingText, { text: `Plugins · ${count}` }),
-						arrow: true,
-						onPress: () => setOpen(e),
-					})
-				}),
-			),
 		]
 	}
 
 	return h(ScrollView, { style: { flex: 1 } }, h(Stack, { spacing: 16, style: { padding: 16 } }, body))
 }
 
+function RepoCount() {
+	const { View } = revenge.react.ReactNative
+	const { Text } = revenge.discord.design.Design
+	const data = store.use()
+	const unread = unreadCount(data?.seen ?? {}, data?.ack ?? 0)
+	return h(
+		View,
+		{ style: { flexDirection: 'row', alignItems: 'center' } },
+		unread > 0 &&
+			h(
+				View,
+				{ style: { minWidth: 20, height: 20, paddingHorizontal: 6, borderRadius: 10, marginRight: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F23F42' } },
+				h(Text, { variant: 'text-xs/bold', style: { color: '#FFFFFF' } }, unread > 99 ? '99+' : String(unread)),
+			),
+		h(Text, { variant: 'text-md/medium', color: 'text-muted' }, String(REPOS.length)),
+	)
+}
+
 export default plugin({
-	jsonStorage: { load: true, default: { seen: {} } },
+	jsonStorage: { load: true, default: { seen: {}, ack: 0 } },
 	SettingsComponent: Browser,
 	start({ cleanup, plugin, jsonStorage }) {
 		if (plugin.startedLate) plugin.requireReload()
 		store = jsonStorage
-		checkUpdates().catch(() => {})
 
 		const settings = revenge.discord.modules.settings
 		const undo: (() => void)[] = []
 		let timer: any
+		let tries = 0
+
+		checkUpdates()
+			.then(() => settings.refreshSettings())
+			.catch(() => {})
 
 		const off = settings.onSettingsModulesLoaded(() => {
 			undo.push(
@@ -434,32 +584,28 @@ export default plugin({
 						type: 'route',
 						parent: null,
 						IconComponent: () => icon('ic_browse_channel'),
-						useTitle: () => 'Unofficial Plugin Repositories',
-						useTrailing: () => String(REPOS.length),
+						useTitle: () => 'Community Plugins',
+						useTrailing: RepoCount,
 						screen: { route: KEY, getComponent: () => Browser },
 					},
 				}),
 			)
 
-			let tries = 0
-			let polls = 0
-			const join = () => {
-				let moved = false
+			const place = () => {
 				try {
-					const rm = settings.addSettingsItemToSection('REVENGE', items => {
-						if (items[items.length - 1] === KEY) return items
-						moved = true
-						return [...items.filter(i => i !== KEY), KEY]
-					})
-					if (!polls) undo.push(rm)
+					settings.addSettingsItemToSection('REVENGE', items => items)()
 				} catch {
-					if (++tries < 500) timer = setTimeout(join, 20)
+					if (++tries < 500) timer = setTimeout(place, 20)
 					return
 				}
-				if (moved) settings.refreshSettings()
-				if (++polls < 24) timer = setTimeout(join, 250)
+				undo.push(
+					settings.registerSettingsSection
+						? settings.registerSettingsSection(KEY, { label: 'Plugin Browser', settings: [KEY], index: 1 })
+						: settings.addSettingsItemToSection('REVENGE', KEY),
+				)
+				settings.refreshSettings()
 			}
-			join()
+			place()
 		})
 
 		cleanup(off, () => {
