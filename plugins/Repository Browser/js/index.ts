@@ -10,7 +10,7 @@ const REPOS = [
 ] as { url: string; source?: string; icon?: string }[]
 
 const KEY = 'RepositoryBrowser'
-const WEEK = 7 * 864e5
+const DAY = 864e5
 const cache = new Map<string, any>()
 let store: any
 const h = (...a: any[]) => (revenge.react.React.createElement as any)(...a)
@@ -64,6 +64,9 @@ async function load(url: string) {
 	}
 }
 
+const summarize = (label: string, items: string[]) =>
+	items.length ? `${label}: ${items.slice(0, 2).join(', ')}${items.length > 2 ? ` +${items.length - 2} more` : ''}` : ''
+
 async function checkUpdates() {
 	await Promise.all(REPOS.map(r => load(r.url)))
 	const seen = { ...(store?.cache?.seen ?? {}) }
@@ -78,19 +81,30 @@ async function checkUpdates() {
 		if (old?.sig === sig) continue
 		dirty = true
 		if (!old) {
-			seen[r.url] = { sig, versions: now, at: 0, changes: '' }
+			seen[r.url] = { sig, versions: now, at: 0, changes: '', news: {} }
 			continue
 		}
-		const lines: string[] = []
+		const updated: string[] = []
+		const news: Record<string, number> = { ...old.news }
 		for (const p of c.plugins) {
 			const was = old.versions[p.id]
-			if (was === undefined) lines.push(`New: ${p.name}`)
-			else if (was !== now[p.id]) lines.push(`${p.name} ${was} to ${now[p.id]}`)
+			if (was === undefined) news[p.id] = Date.now()
+			else if (was !== now[p.id]) updated.push(`${p.name} ${was} to ${now[p.id]}`)
 		}
-		const more = lines.length > 3 ? ` +${lines.length - 3} more` : ''
-		seen[r.url] = { sig, versions: now, at: Date.now(), changes: lines.slice(0, 3).join(', ') + more }
+		const removed = Object.keys(old.versions).filter(id => !(id in now))
+		for (const id of Object.keys(news)) if (!(id in now)) delete news[id]
+		const changes = [summarize('Updated', updated), summarize('Removed', removed)].filter(Boolean).join('\n')
+		seen[r.url] = { sig, versions: now, at: changes ? Date.now() : old.at, changes: changes || old.changes, news }
 	}
 	if (dirty) await store.set({ seen }, true)
+}
+
+function dismissNew(url: string, id: string) {
+	const entry = store.cache?.seen?.[url]
+	if (!entry?.news?.[id]) return
+	const news = { ...entry.news }
+	delete news[id]
+	return store.set({ seen: { ...store.cache.seen, [url]: { ...entry, news } } }, true)
 }
 
 const repoList = (): Promise<any[]> => call('revenge.plugins.repos.list', [])
@@ -331,8 +345,33 @@ function Browser() {
 					),
 		]
 	} else {
-		const recent = REPOS.filter(e => seen[e.url]?.at && Date.now() - seen[e.url].at < WEEK).sort((a, b) => seen[b.url].at - seen[a.url].at)
+		const recent = REPOS.filter(e => seen[e.url]?.at && seen[e.url].changes && Date.now() - seen[e.url].at < DAY).sort((a, b) => seen[b.url].at - seen[a.url].at)
+		const fresh = REPOS.flatMap(e => Object.entries<number>(seen[e.url]?.news ?? {}).map(([id, at]) => ({ e, id, at })))
+			.filter(n => cache.get(n.e.url)?.plugins.some((p: any) => p.id === n.id))
+			.sort((a, b) => b.at - a.at)
 		body = [
+			fresh.length
+				? h(
+						TableRowGroup,
+						{ key: 'new', title: 'New plugins' },
+						fresh.map(({ e, id, at }) => {
+							const r = cache.get(e.url)
+							const p = r.plugins.find((x: any) => x.id === id)
+							return h(TableRow, {
+								key: `${e.url}#${id}`,
+								icon: icon(p.icon, 'PuzzlePieceIcon'),
+								label: p.name,
+								subLabel: `New in ${r.name}\n${ago(at)}`,
+								subLabelLineClamp: 3,
+								arrow: true,
+								onPress: () => {
+									dismissNew(e.url, id)
+									setOpen(e)
+								},
+							})
+						}),
+					)
+				: null,
 			recent.length
 				? h(
 						TableRowGroup,
@@ -344,7 +383,7 @@ function Browser() {
 								icon: icon(repoIcon(r, e)),
 								label: r?.name ?? e.url,
 								subLabel: `${seen[e.url].changes}\n${ago(seen[e.url].at)}`,
-								subLabelLineClamp: 3,
+								subLabelLineClamp: 5,
 								arrow: true,
 								onPress: () => setOpen(e),
 							})
