@@ -1,10 +1,10 @@
 {
 	"format": 1,
 	"id": "k1ngop.repository-browser",
-	"name": "Repository Browser",
+	"name": "Plugin Browser",
 	"description": "Browse third-party repositories, see what they offer, and add them to Revenge Next.",
 	"author": "k1ng_op",
-	"version": "1.1.1",
+	"version": "1.1.2",
 	"icon": "ic_browse_channel",
 	"dependencies": {
 		"revenge.api": {
