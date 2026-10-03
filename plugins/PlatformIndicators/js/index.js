@@ -561,7 +561,8 @@ export default plugin({
 					const kids = result?.props?.children;
 					if (!Array.isArray(kids)) return result;
 
-					const index = kids.findIndex((c) => (c?.type?.name ?? c?.type?.displayName) === "Status");
+					const isStatusLike = (c) => c?.props && typeof c.props.status === "string" && typeof c.props.streaming === "boolean";
+					const index = kids.findIndex((c) => (c?.type?.name ?? c?.type?.displayName) === "Status" || isStatusLike(c));
 					if (index === -1) return result;
 
 					const userId = props?.user?.id ?? kids.find((c) => c?.props?.user?.id)?.props?.user?.id;
