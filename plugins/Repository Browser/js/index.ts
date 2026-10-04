@@ -11,7 +11,9 @@ const REPOS = [
 
 const KEY = 'RepositoryBrowser'
 const DAY = 864e5
-const SORTS = { name: 'A-Z', updated: 'Recently updated', newest: 'Newest', installed: 'Installed first' } as Record<string, string>
+const SORTS = { default: 'Default', name: 'A-Z', updated: 'Recently updated', newest: 'Newest', installed: 'Installed first' } as Record<string, string>
+const NOTICE =
+	'The repositories listed here are made by the community and are not reviewed by Revenge or Discord. A plugin can access your account and run code inside this app. Only install plugins from authors you trust, read the source before you install, and use them at your own risk.'
 const cache = new Map<string, any>()
 let store: any
 const h = (...a: any[]) => (revenge.react.React.createElement as any)(...a)
@@ -117,6 +119,12 @@ function dismiss(kind: 'news' | 'updates', url: string, id: string) {
 	const next = { ...entry[kind] }
 	delete next[id]
 	return save({ seen: { ...seen, [url]: { ...entry, [kind]: next } } })
+}
+
+function dismissAll(kind: 'news' | 'updates') {
+	const seen = store.cache?.seen ?? {}
+	const next = Object.fromEntries(Object.entries<any>(seen).map(([url, entry]) => [url, { ...entry, [kind]: {} }]))
+	return save({ seen: next })
 }
 
 const unreadCount = (seen: Record<string, any>, ack: number) =>
@@ -236,7 +244,7 @@ function Browser() {
 	const [st, setSt] = React.useState<Awaited<ReturnType<typeof readState>> | null>(null)
 	const [busy, setBusy] = React.useState('')
 	const [query, setQuery] = React.useState('')
-	const [sort, setSort] = React.useState('name')
+	const [sort, setSort] = React.useState('default')
 	const [sortOpen, setSortOpen] = React.useState(false)
 	const [, update] = React.useReducer((n: number) => n + 1, 0)
 
@@ -296,7 +304,7 @@ function Browser() {
 	}
 
 	const sortPlugins = (items: { e: (typeof REPOS)[number]; p: any }[]) =>
-		[...items].sort((a, b) => pluginRank(b.e, b.p) - pluginRank(a.e, a.p) || byName(a.p.name, b.p.name))
+		sort === 'default' ? items : [...items].sort((a, b) => pluginRank(b.e, b.p) - pluginRank(a.e, a.p) || byName(a.p.name, b.p.name))
 
 	const plugin = (e: (typeof REPOS)[number], p: any, origin?: string) => {
 		const have = st?.installed.get(p.id)
@@ -377,16 +385,22 @@ function Browser() {
 			h(
 				View,
 				{ style: { marginLeft: 8 } },
-				h(IconButton, { size: 'md', variant: sortOpen ? 'primary' : 'secondary', icon: asset('FiltersHorizontalIcon'), onPress: () => setSortOpen((v: boolean) => !v) }),
+				h(IconButton, { size: 'md', variant: sortOpen || sort !== 'default' ? 'primary' : 'secondary', icon: asset('FiltersHorizontalIcon'), onPress: () => setSortOpen((v: boolean) => !v) }),
 			),
 		)
 
 	const sortUi = (ranks: number[]) => [
-		h(
-			Text,
-			{ key: 'sorted', variant: 'text-sm/medium', color: 'text-muted' },
-			`Sorted by ${SORTS[sort]}${(sort === 'updated' || sort === 'newest') && !ranks.some(Boolean) ? ' (no history yet, showing A-Z)' : ''}`,
-		),
+		sort !== 'default' &&
+			h(
+				View,
+				{ key: 'sorted', style: { flexDirection: 'row', alignItems: 'center' } },
+				h(
+					Text,
+					{ variant: 'text-sm/medium', color: 'text-muted', style: { flex: 1 } },
+					`Sorted by ${SORTS[sort]}${(sort === 'updated' || sort === 'newest') && !ranks.some(Boolean) ? ' (no history yet, showing A-Z)' : ''}`,
+				),
+				h(Button, { text: 'Reset', size: 'sm', variant: 'tertiary', onPress: () => (setSort('default'), setSortOpen(false)) }),
+			),
 		sortOpen &&
 			h(
 				TableRadioGroup,
@@ -395,24 +409,35 @@ function Browser() {
 			),
 	]
 
-	const warning = () => {
-		const source = asset('WarningIcon') ?? asset('CircleExclamationPointIcon')
-		return h(
-			View,
-			{ key: 'warning', style: { flexDirection: 'row', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#F23F42', backgroundColor: 'rgba(242, 63, 66, 0.12)' } },
-			source && h(View, { style: { marginRight: 10, paddingTop: 2 } }, h(TableRow.Icon, { source })),
+	const notice = () =>
+		h(
+			Card,
+			{ key: 'notice', border: 'strong', style: { paddingVertical: 14, paddingHorizontal: 16 } },
 			h(
 				View,
-				{ style: { flex: 1 } },
-				h(Text, { variant: 'heading-md/bold', style: { color: '#FF7B7E' } }, 'Unofficial plugins and repositories'),
+				{ style: { flexDirection: 'row', alignItems: 'center' } },
 				h(
-					Text,
-					{ variant: 'text-sm/medium', style: { marginTop: 4 } },
-					'Plugins installed from unofficial sources can run unverified code in this app without your awareness. Check the source first, and install at your own risk.',
+					View,
+					{ style: { flex: 1 } },
+					h(Text, { variant: 'heading-md/semibold' }, 'Unofficial Plugins and Repositories'),
+					h(
+						Text,
+						{ variant: 'text-sm/medium', color: 'text-muted', style: { marginTop: 4 } },
+						'Plugins installed from unofficial sources may run unverified code in this app without your awareness. Check the source first and use at your own risk.',
+					),
+				),
+				h(
+					View,
+					{ style: { marginLeft: 12 } },
+					h(IconButton, {
+						size: 'sm',
+						variant: 'secondary',
+						icon: asset('CircleInformationIcon') ?? asset('InfoIcon'),
+						onPress: () => modal('Unofficial sources', NOTICE, B => [h(B, { key: 'ok', text: 'OK', variant: 'secondary' })]),
+					}),
 				),
 			),
 		)
-	}
 
 	const feed = (kind: 'news' | 'updates', title: string) => {
 		const items = REPOS.flatMap(e =>
@@ -421,9 +446,9 @@ function Browser() {
 			.filter(i => (kind === 'news' || (Date.now() - i.at < DAY && !seen[i.e.url].news?.[i.id])) && cache.get(i.e.url)?.plugins.some((p: any) => p.id === i.id))
 			.sort((a, b) => b.at - a.at)
 		if (!items.length) return null
-		return h(
+		const rows = h(
 			TableRowGroup,
-			{ key: kind, title },
+			{},
 			items.map(({ e, id, v, at }) => {
 				const r = cache.get(e.url)
 				const p = r.plugins.find((x: any) => x.id === id)
@@ -441,6 +466,17 @@ function Browser() {
 					},
 				})
 			}),
+		)
+		return h(
+			View,
+			{ key: kind },
+			h(
+				View,
+				{ style: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
+				h(Text, { variant: 'text-md/medium', color: 'text-muted' }, title),
+				h(Button, { text: 'Clear', size: 'sm', variant: 'tertiary', onPress: () => dismissAll(kind) }),
+			),
+			rows,
 		)
 	}
 
@@ -497,12 +533,11 @@ function Browser() {
 		const hits = q
 			? sortPlugins(REPOS.flatMap(e => (cache.get(e.url)?.plugins ?? []).filter((p: any) => matches(p.name, p.id, p.description, p.author)).map((p: any) => ({ e, p }))))
 			: []
-		const repos = REPOS.filter(e => matches(repoName(e), cache.get(e.url)?.description, e.url)).sort(
-			(a, b) => repoRank(b) - repoRank(a) || byName(repoName(a), repoName(b)),
-		)
+		const listed = REPOS.filter(e => matches(repoName(e), cache.get(e.url)?.description, e.url))
+		const repos = sort === 'default' ? listed : listed.sort((a, b) => repoRank(b) - repoRank(a) || byName(repoName(a), repoName(b)))
 		body = [
 			controls(),
-			warning(),
+			notice(),
 			...sortUi(q ? hits.map(({ e, p }) => pluginRank(e, p)) : repos.map(repoRank)),
 			q
 				? hits.length
