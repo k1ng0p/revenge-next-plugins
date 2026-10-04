@@ -1,12 +1,12 @@
 const REPOS = [
-	{ url: 'https://k1ng0p.github.io/revenge-next-plugins/', source: 'https://github.com/k1ng0p revenge-next-plugins', discord: '641266820187160576' },
-	{ url: 'https://bleelblep.github.io/revenge-next-plugins/', source: 'https://github.com/bleelblep/revenge-next-plugins' discord: '119043674385547264' },
-	{ url: 'https://next.jarviscli.dev/', source: 'https://next.jarviscli.dev/' discord: '1356936317501571214' },
-	{ url: 'https://dev-next.jarviscli.dev/', source: 'https://github.com/everestmcarthur/revenge-next-plugs-dev' discord: '1356936317501571214' },
-	{ url: 'https://contrabag.github.io/revenge-next-plugins/', source: 'https://github.com/contrabag/revenge-next-plugins' discord: '780075200950566933' },
-	{ url: 'https://rn.kmmiio99o.dev/', source: 'https://git.gay/kmmiio99o/revenge-next-plugins' discord: '879393496627306587' },
-	{ url: 'https://next.tralwdwd.dev/', source: 'https://github.com/tralwdwd/revenge-next-plugins' discord: '1278723517436788897' },
-	{ url: 'https://mxtiy.knifecodez.workers.dev/', source: 'https://github.com/NoReplyUI5/revenge-next-plugins' discord: '1053918356375351386' },
+	{ url: 'https://k1ng0p.github.io/revenge-next-plugins/', source: 'https://github.com/k1ng0p/revenge-next-plugins', discord: '641266820187160576' },
+	{ url: 'https://bleelblep.github.io/revenge-next-plugins/', source: 'https://github.com/bleelblep/revenge-next-plugins', discord: '119043674385547264' },
+	{ url: 'https://next.jarviscli.dev/', source: 'https://next.jarviscli.dev/', discord: '1356936317501571214' },
+	{ url: 'https://dev-next.jarviscli.dev/', source: 'https://github.com/everestmcarthur/revenge-next-plugs-dev', discord: '1356936317501571214' },
+	{ url: 'https://contrabag.github.io/revenge-next-plugins/', source: 'https://github.com/contrabag/revenge-next-plugins', discord: '780075200950566933' },
+	{ url: 'https://rn.kmmiio99o.dev/', source: 'https://git.gay/kmmiio99o/revenge-next-plugins', discord: '879393496627306587' },
+	{ url: 'https://next.tralwdwd.dev/', source: 'https://github.com/tralwdwd/revenge-next-plugins', discord: '1278723517436788897' },
+	{ url: 'https://mxtiy.knifecodez.workers.dev/', source: 'https://github.com/NoReplyUI5/revenge-next-plugins', discord: '1053918356375351386' },
 ] as { url: string; source?: string; icon?: string; discord?: string }[]
 
 const KEY = 'RepositoryBrowser'
