@@ -43,46 +43,101 @@ const avatar = (u?: string) => {
 
 const repoIcon = (r: any, e: (typeof REPOS)[number]) => r?.icon ?? e.icon ?? avatar(e.source) ?? avatar(e.url)
 
-async function load(url: string) {
+const sleep = (ms: number) => new Promise(done => setTimeout(done, ms))
+const inflight = new Map<string, Promise<void>>()
+const reason = (err: string) => (/network request failed/i.test(err) ? "Couldn't connect to this repository" : err)
+const waiting: (() => void)[] = []
+let active = 0
+
+const takeSlot = () => (active < 4 ? (active++, Promise.resolve()) : new Promise<void>(go => waiting.push(go)))
+const freeSlot = () => {
+	const next = waiting.shift()
+	if (next) next()
+	else active--
+}
+
+async function fetchIndex(url: string, attempt: number, limit: number) {
+	const ctl = new AbortController()
+	const timer = setTimeout(() => ctl.abort(), limit)
 	try {
-		const res = await fetch(`${slash(url)}index.json?t=${Date.now()}`)
-		if (!res.ok) throw new Error(`HTTP ${res.status}`)
+		const res = await fetch(`${slash(url)}index.json${attempt === 1 ? '' : `?t=${Date.now()}`}`, { signal: ctl.signal })
+		if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { permanent: res.status < 500 && res.status !== 429 })
 		const json = await res.json()
-		if (typeof json?.plugins !== 'object') throw new Error('Not a Revenge repository')
-		cache.set(url, {
-			name: json.name || url,
-			description: json.description,
-			icon: json.icon,
-			plugins: Object.entries<any>(json.plugins).map(([id, p]) => ({
-				id,
-				name: p.name ?? id,
-				description: p.description,
-				author: p.author,
-				icon: p.icon,
-				version: p.channels?.latest,
-			})),
-		})
-	} catch (e: any) {
-		cache.set(url, { name: url, plugins: [], err: e?.message ?? String(e) })
+		if (typeof json?.plugins !== 'object') throw Object.assign(new Error('Not a Revenge repository'), { permanent: true })
+		return json
+	} finally {
+		clearTimeout(timer)
 	}
 }
 
-const save = (patch: Record<string, any>) =>
-	store.set({ seen: store.cache?.seen ?? {}, ack: store.cache?.ack ?? 0, ...patch }, true)
+async function fetchRepo(url: string) {
+	const deadline = Date.now() + 45000
+	let last: any
+	for (let attempt = 0; attempt < 3; attempt++) {
+		try {
+			return await fetchIndex(url, attempt, Math.min(15000, deadline - Date.now()))
+		} catch (e: any) {
+			last = e
+			if (e?.permanent || Date.now() >= deadline) break
+		}
+		if (attempt < 2) await sleep(500 * (attempt + 1))
+	}
+	throw last
+}
 
-async function checkUpdates() {
-	await Promise.all(REPOS.map(r => load(r.url)))
+function load(url: string) {
+	const running = inflight.get(url)
+	if (running) return running
+	const job = takeSlot()
+		.then(() => fetchRepo(url))
+		.then(json => {
+			cache.set(url, {
+				name: json.name || url,
+				description: json.description,
+				icon: json.icon,
+				plugins: Object.entries<any>(json.plugins).map(([id, p]) => ({
+					id,
+					name: p.name ?? id,
+					description: p.description,
+					author: p.author,
+					icon: p.icon,
+					version: p.channels?.latest,
+				})),
+			})
+		})
+		.catch((e: any) => {
+			const err = e?.name === 'AbortError' ? 'Request timed out' : (e?.message ?? String(e))
+			const prev = cache.get(url)
+			cache.set(url, prev && !prev.err ? { ...prev, stale: err } : { name: url, plugins: [], err })
+		})
+		.finally(() => {
+			freeSlot()
+			inflight.delete(url)
+		})
+	inflight.set(url, job)
+	return job
+}
+
+const save = (patch: Record<string, any>) =>
+	store.set({ seen: store.cache?.seen ?? {}, ack: store.cache?.ack ?? 0, snaps: store.cache?.snaps ?? {}, ...patch }, true)
+
+async function checkUpdates(only?: string[], onEach?: () => void) {
+	const list = REPOS.filter(r => !only || only.includes(r.url))
+	await Promise.all(list.map(r => load(r.url).then(onEach)))
 	const seen = { ...(store?.cache?.seen ?? {}) }
-	let dirty = false
-	for (const r of REPOS) {
+	const snaps = { ...(store?.cache?.snaps ?? {}) }
+	for (const r of list) {
 		const c = cache.get(r.url)
-		if (!c || c.err) continue
+		if (c && !c.err && !c.stale) snaps[r.url] = { at: Date.now(), data: c }
+	}
+	for (const r of list) {
+		const c = cache.get(r.url)
+		if (!c || c.err || c.stale) continue
 		const now: Record<string, string> = {}
 		for (const p of c.plugins) now[p.id] = p.version ?? ''
 		const sig = JSON.stringify(Object.entries(now).sort())
 		const old = seen[r.url]
 		if (old?.sig === sig) continue
-		dirty = true
 		if (!old) {
 			seen[r.url] = { sig, versions: now, news: {}, updates: {}, meta: {} }
 			continue
@@ -109,7 +164,7 @@ async function checkUpdates() {
 			}
 		seen[r.url] = { sig, versions: now, news, updates, meta }
 	}
-	if (dirty) await save({ seen })
+	await save({ seen, snaps })
 }
 
 function dismiss(kind: 'news' | 'updates', url: string, id: string) {
@@ -128,7 +183,7 @@ function dismissAll(kind: 'news' | 'updates') {
 }
 
 const unreadCount = (seen: Record<string, any>, ack: number) =>
-	Object.values(seen).reduce((sum: number, r: any) => sum + Object.values<number>(r.news ?? {}).filter(at => at > ack).length, 0)
+	REPOS.reduce((sum, r) => sum + Object.values<number>(seen[r.url]?.news ?? {}).filter(at => at > ack).length, 0)
 
 const repoList = (): Promise<any[]> => call('revenge.plugins.repos.list', [])
 
@@ -237,7 +292,7 @@ const flags = new Map<string, boolean>()
 function Browser() {
 	const { React } = revenge.react
 	const { ScrollView, View, BackHandler, Linking } = revenge.react.ReactNative
-	const { Stack, TableRow, TableRowGroup, TableSwitchRow, TableRadioGroup, TableRadioRow, Button, IconButton, Card, Text } = revenge.discord.design.Design
+	const { Stack, TableRow, TableRowGroup, TableSwitchRow, Button, ContextMenu, IconButton, Card, Text } = revenge.discord.design.Design
 	const { FormSwitch, SearchInput } = revenge.components
 	const seen = store.use()?.seen ?? {}
 	const [open, setOpen] = React.useState<(typeof REPOS)[number] | null>(null)
@@ -245,18 +300,32 @@ function Browser() {
 	const [busy, setBusy] = React.useState('')
 	const [query, setQuery] = React.useState('')
 	const [sort, setSort] = React.useState('default')
-	const [sortOpen, setSortOpen] = React.useState(false)
+	const [refreshing, setRefreshing] = React.useState(false)
+	const [retrying, setRetrying] = React.useState('')
 	const [, update] = React.useReducer((n: number) => n + 1, 0)
 
 	const sync = () => readState().then(setSt).catch(() => {})
+	const refreshAll = async () => {
+		if (refreshing) return
+		setRefreshing(true)
+		await checkUpdates(undefined, update)
+		await sync()
+		await save({ ack: Date.now() })
+		setRefreshing(false)
+		update()
+	}
+	const retry = async (e: (typeof REPOS)[number]) => {
+		setRetrying(e.url)
+		await checkUpdates([e.url], update)
+		setRetrying('')
+		update()
+	}
 	const openRepo = (e: (typeof REPOS)[number]) => {
 		setQuery('')
-		setSortOpen(false)
 		setOpen(e)
 	}
 	const closeRepo = () => {
 		setQuery('')
-		setSortOpen(false)
 		setOpen(null)
 	}
 
@@ -264,7 +333,7 @@ function Browser() {
 		let alive = true
 		save({ ack: Date.now() })
 		sync()
-		checkUpdates().then(() => {
+		checkUpdates(undefined, () => alive && update()).then(() => {
 			if (!alive) return
 			save({ ack: Date.now() })
 			update()
@@ -382,10 +451,29 @@ function Browser() {
 			View,
 			{ key: 'controls', style: { flexDirection: 'row', alignItems: 'center' } },
 			h(View, { style: { flex: 1 } }, h(SearchInput, { value: query, onChange: setQuery, isClearable: true, placeholder: open ? 'Search this repository' : 'Search plugins and repositories' })),
+			!open &&
+				h(
+					View,
+					{ style: { marginLeft: 8 } },
+					h(IconButton, { size: 'md', variant: 'secondary', icon: asset('RetryIcon'), loading: refreshing, disabled: refreshing, onPress: refreshAll }),
+				),
 			h(
 				View,
 				{ style: { marginLeft: 8 } },
-				h(IconButton, { size: 'md', variant: sortOpen || sort !== 'default' ? 'primary' : 'secondary', icon: asset('FiltersHorizontalIcon'), onPress: () => setSortOpen((v: boolean) => !v) }),
+				h(
+					ContextMenu,
+					{
+						title: 'Sort by',
+						items: [
+							Object.entries(SORTS).map(([k, label]) => ({
+								label,
+								IconComponent: k === sort ? () => icon('CheckmarkLargeIcon', 'CheckIcon') : undefined,
+								action: () => setSort(k),
+							})),
+						],
+					},
+					(props: any) => h(IconButton, { ...props, size: 'md', variant: sort !== 'default' ? 'primary' : 'secondary', icon: asset('FiltersHorizontalIcon') }),
+				),
 			),
 		)
 
@@ -399,13 +487,7 @@ function Browser() {
 					{ variant: 'text-sm/medium', color: 'text-muted', style: { flex: 1 } },
 					`Sorted by ${SORTS[sort]}${(sort === 'updated' || sort === 'newest') && !ranks.some(Boolean) ? ' (no history yet, showing A-Z)' : ''}`,
 				),
-				h(Button, { text: 'Reset', size: 'sm', variant: 'tertiary', onPress: () => (setSort('default'), setSortOpen(false)) }),
-			),
-		sortOpen &&
-			h(
-				TableRadioGroup,
-				{ key: 'sort', title: 'Sort by', defaultValue: sort, onChange: (v: string) => (setSort(v), setSortOpen(false)) },
-				Object.entries(SORTS).map(([k, label]) => h(TableRadioRow, { key: k, label, value: k })),
+				h(Button, { text: 'Reset', size: 'sm', variant: 'tertiary', onPress: () => setSort('default') }),
 			),
 	]
 
@@ -514,10 +596,10 @@ function Browser() {
 					arrow: true,
 					onPress: () => Linking.openURL(open.source ?? open.url),
 				}),
-				h(TableRow, { key: 'refresh', label: 'Refresh', icon: icon('RetryIcon'), onPress: () => load(open.url).then(() => (sync(), update())) }),
+				h(TableRow, { key: 'refresh', label: 'Refresh', icon: icon('RetryIcon'), onPress: () => checkUpdates([open.url], update).then(sync) }),
 			]),
 			r?.err
-				? h(Text, { key: 'err', variant: 'text-md/medium' }, `Failed to load: ${r.err}`)
+				? h(Text, { key: 'err', variant: 'text-md/medium' }, `Failed to load: ${reason(r.err)}. Use Refresh above to try again.`)
 				: h(
 						Stack,
 						{ key: 'plugins', spacing: 12 },
@@ -562,10 +644,12 @@ function Browser() {
 								key: e.url,
 								icon: icon(repoIcon(r, e)),
 								label: r?.name ?? e.url,
-								subLabel: r ? (r.err ? `Failed: ${r.err}` : r.description || e.url) : 'Loading...',
+								subLabel: r ? (r.err ? reason(r.err) : r.stale ? `Couldn't refresh, showing ${r.saved ? `copy saved ${ago(r.saved)}` : 'earlier data'}` : r.description || e.url) : 'Loading...',
 								labelLineClamp: 1,
 								subLabelLineClamp: 2,
-								trailing: count && h(TableRow.TrailingText, { text: `Plugins · ${count}` }),
+								trailing: r?.err || r?.stale
+									? h(Button, { text: 'Retry', size: 'sm', variant: 'secondary', loading: retrying === e.url, onPress: () => retry(e) })
+									: count && h(TableRow.TrailingText, { text: `Plugins · ${count}` }),
 								arrow: true,
 								onPress: () => openRepo(e),
 							})
@@ -597,11 +681,13 @@ function RepoCount() {
 }
 
 export default plugin({
-	jsonStorage: { load: true, default: { seen: {}, ack: 0 } },
+	jsonStorage: { load: true, default: { seen: {}, ack: 0, snaps: {} } },
 	SettingsComponent: Browser,
 	start({ cleanup, plugin, jsonStorage }) {
 		if (plugin.startedLate) plugin.requireReload()
 		store = jsonStorage
+		for (const [url, snap] of Object.entries<any>(jsonStorage.cache?.snaps ?? {}))
+			if (REPOS.some(r => r.url === url)) cache.set(url, { ...snap.data, saved: snap.at })
 
 		const settings = revenge.discord.modules.settings
 		const undo: (() => void)[] = []
