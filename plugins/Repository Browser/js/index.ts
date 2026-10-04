@@ -1,13 +1,13 @@
 const REPOS = [
-	{ url: 'https://k1ng0p.github.io/revenge-next-plugins/', source: 'https://github.com/k1ng0p/revenge-next-plugins' },
-	{ url: 'https://bleelblep.github.io/revenge-next-plugins/', source: 'https://github.com/bleelblep/revenge-next-plugins' },
-	{ url: 'https://next.jarviscli.dev/', source: 'https://next.jarviscli.dev/' },
-	{ url: 'https://dev-next.jarviscli.dev/', source: 'https://github.com/everestmcarthur/revenge-next-plugs-dev' },
-	{ url: 'https://contrabag.github.io/revenge-next-plugins/', source: 'https://github.com/contrabag/revenge-next-plugins' },
-	{ url: 'https://rn.kmmiio99o.dev/', source: 'https://git.gay/kmmiio99o/revenge-next-plugins' },
-	{ url: 'https://next.tralwdwd.dev/', source: 'https://github.com/tralwdwd/revenge-next-plugins' },
-	{ url: 'https://mxtiy.knifecodez.workers.dev/', source: 'https://github.com/NoReplyUI5/revenge-next-plugins' },
-] as { url: string; source?: string; icon?: string }[]
+	{ url: 'https://k1ng0p.github.io/revenge-next-plugins/', source: 'https://github.com/k1ng0p revenge-next-plugins', discord: '641266820187160576' },
+	{ url: 'https://bleelblep.github.io/revenge-next-plugins/', source: 'https://github.com/bleelblep/revenge-next-plugins' discord: '119043674385547264' },
+	{ url: 'https://next.jarviscli.dev/', source: 'https://next.jarviscli.dev/' discord: '1356936317501571214' },
+	{ url: 'https://dev-next.jarviscli.dev/', source: 'https://github.com/everestmcarthur/revenge-next-plugs-dev' discord: '1356936317501571214' },
+	{ url: 'https://contrabag.github.io/revenge-next-plugins/', source: 'https://github.com/contrabag/revenge-next-plugins' discord: '780075200950566933' },
+	{ url: 'https://rn.kmmiio99o.dev/', source: 'https://git.gay/kmmiio99o/revenge-next-plugins' discord: '879393496627306587' },
+	{ url: 'https://next.tralwdwd.dev/', source: 'https://github.com/tralwdwd/revenge-next-plugins' discord: '1278723517436788897' },
+	{ url: 'https://mxtiy.knifecodez.workers.dev/', source: 'https://github.com/NoReplyUI5/revenge-next-plugins' discord: '1053918356375351386' },
+] as { url: string; source?: string; icon?: string; discord?: string }[]
 
 const KEY = 'RepositoryBrowser'
 const DAY = 864e5
@@ -42,6 +42,52 @@ const avatar = (u?: string) => {
 }
 
 const repoIcon = (r: any, e: (typeof REPOS)[number]) => r?.icon ?? e.icon ?? avatar(e.source) ?? avatar(e.url)
+const isRemote = (v?: string): v is string => !!v && /^(data|https):/.test(v)
+
+const discordAvatars = new Map<string, string | null>()
+
+async function discordAvatar(id: string) {
+	const known = discordAvatars.get(id)
+	if (known !== undefined) return known
+	let hash: string | null | undefined
+	try {
+		hash = revenge.discord.flux.Stores.UserStore?.getUser?.(id)?.avatar
+		if (!hash) {
+			const [http] = revenge.modules.finders.lookupModule(revenge.modules.finders.filters.withProps('HTTP', 'post'))
+			const res = await http?.HTTP?.get({ url: `/users/${id}` })
+			hash = res?.body?.avatar ?? null
+		}
+	} catch {
+		return null
+	}
+	const url = hash ? `https://cdn.discordapp.com/avatars/${id}/${hash}.png?size=128` : null
+	discordAvatars.set(id, url)
+	return url
+}
+
+function RepoAvatar({ e, r }: { e: (typeof REPOS)[number]; r: any }) {
+	const { React } = revenge.react
+	const [profile, setProfile] = React.useState<string | null | undefined>(e.discord ? discordAvatars.get(e.discord) : null)
+	const [failed, setFailed] = React.useState(0)
+
+	React.useEffect(() => {
+		if (!e.discord) return
+		let alive = true
+		discordAvatar(e.discord).then(url => alive && setProfile(url))
+		return () => void (alive = false)
+	}, [e.discord])
+	React.useEffect(() => setFailed(0), [profile])
+
+	const preferred = repoIcon(r, e)
+	const urls = [profile, preferred, avatar(e.source), avatar(e.url)].filter((v, i, all): v is string => isRemote(v ?? undefined) && all.indexOf(v) === i)
+	if (failed >= urls.length) return icon(isRemote(preferred) ? undefined : preferred)
+	return h(revenge.react.ReactNative.Image, {
+		key: urls[failed],
+		source: { uri: urls[failed] },
+		style: { width: 24, height: 24, borderRadius: 12 },
+		onError: () => setFailed((n: number) => n + 1),
+	})
+}
 
 const sleep = (ms: number) => new Promise(done => setTimeout(done, ms))
 const inflight = new Map<string, Promise<void>>()
@@ -92,6 +138,7 @@ function load(url: string) {
 		.then(() => fetchRepo(url))
 		.then(json => {
 			cache.set(url, {
+				at: Date.now(),
 				name: json.name || url,
 				description: json.description,
 				icon: json.icon,
@@ -302,6 +349,7 @@ function Browser() {
 	const [sort, setSort] = React.useState('default')
 	const [refreshing, setRefreshing] = React.useState(false)
 	const [retrying, setRetrying] = React.useState('')
+	const [reloading, setReloading] = React.useState(false)
 	const [, update] = React.useReducer((n: number) => n + 1, 0)
 
 	const sync = () => readState().then(setSt).catch(() => {})
@@ -313,6 +361,13 @@ function Browser() {
 		await save({ ack: Date.now() })
 		setRefreshing(false)
 		update()
+	}
+	const reloadRepo = async () => {
+		if (!open || reloading) return
+		setReloading(true)
+		await checkUpdates([open.url], update)
+		await sync()
+		setReloading(false)
 	}
 	const retry = async (e: (typeof REPOS)[number]) => {
 		setRetrying(e.url)
@@ -596,7 +651,14 @@ function Browser() {
 					arrow: true,
 					onPress: () => Linking.openURL(open.source ?? open.url),
 				}),
-				h(TableRow, { key: 'refresh', label: 'Refresh', icon: icon('RetryIcon'), onPress: () => checkUpdates([open.url], update).then(sync) }),
+				h(TableRow, {
+					key: 'refresh',
+					label: reloading ? 'Refreshing...' : 'Refresh',
+					subLabel: reloading ? undefined : r?.err ? reason(r.err) : r?.at ? `${r.stale ? 'Last updated' : 'Updated'} ${ago(r.at)}` : undefined,
+					icon: icon('RetryIcon'),
+					disabled: reloading,
+					onPress: reloadRepo,
+				}),
 			]),
 			r?.err
 				? h(Text, { key: 'err', variant: 'text-md/medium' }, `Failed to load: ${reason(r.err)}. Use Refresh above to try again.`)
@@ -642,7 +704,7 @@ function Browser() {
 							const count = r && !r.err ? String(r.plugins.length) : ''
 							return h(TableRow, {
 								key: e.url,
-								icon: icon(repoIcon(r, e)),
+								icon: h(RepoAvatar, { e, r }),
 								label: r?.name ?? e.url,
 								subLabel: r ? (r.err ? reason(r.err) : r.stale ? `Couldn't refresh, showing ${r.saved ? `copy saved ${ago(r.saved)}` : 'earlier data'}` : r.description || e.url) : 'Loading...',
 								labelLineClamp: 1,
