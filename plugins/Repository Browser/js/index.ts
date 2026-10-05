@@ -934,8 +934,9 @@ export default plugin({
 
 		const settings = revenge.discord.modules.settings
 		const undo: (() => void)[] = []
-		let timer: any
-		let tries = 0
+		let retry: any
+		let attempts = 0
+		let stopped = false
 
 		const poll = () => checkUpdates().catch(() => {})
 		poll().then(() => settings.refreshSettings())
@@ -945,6 +946,34 @@ export default plugin({
 		const appState = revenge.react.ReactNative.AppState.addEventListener('change', (next: string) => {
 			if (next === 'active' && Date.now() - lastCheck > RECHECK_AFTER_FOCUS) poll()
 		})
+
+		const revengeSectionExists = () => {
+			try {
+				settings.addSettingsItemToSection('REVENGE', items => items)()
+				return true
+			} catch {
+				return false
+			}
+		}
+
+		// sections are placed in the order they were registered, so ours has to come after Revenge's own
+		// or it ends up far down the list. Revenge registers it a moment after the settings modules load,
+		// so check a few times in a row before falling back to a timer.
+		const placeSection = () => {
+			if (stopped) return
+			if (!revengeSectionExists()) {
+				attempts++
+				if (attempts < 20) Promise.resolve().then(placeSection)
+				else if (attempts < 500) retry = setTimeout(placeSection, 20)
+				return
+			}
+			undo.push(
+				settings.registerSettingsSection
+					? settings.registerSettingsSection(KEY, { label: 'Plugin Browser', settings: [KEY], index: 1 })
+					: settings.addSettingsItemToSection('REVENGE', KEY),
+			)
+			settings.refreshSettings()
+		}
 
 		const off = settings.onSettingsModulesLoaded(() => {
 			undo.push(
@@ -959,27 +988,12 @@ export default plugin({
 					},
 				}),
 			)
-
-			// the REVENGE section isn't there right away, so keep trying for a bit
-			const place = () => {
-				try {
-					settings.addSettingsItemToSection('REVENGE', items => items)()
-				} catch {
-					if (++tries < 500) timer = setTimeout(place, 20)
-					return
-				}
-				undo.push(
-					settings.registerSettingsSection
-						? settings.registerSettingsSection(KEY, { label: 'Plugin Browser', settings: [KEY], index: 1 })
-						: settings.addSettingsItemToSection('REVENGE', KEY),
-				)
-				settings.refreshSettings()
-			}
-			place()
+			placeSection()
 		})
 
 		cleanup(off, () => {
-			clearTimeout(timer)
+			stopped = true
+			clearTimeout(retry)
 			clearInterval(interval)
 			appState.remove()
 			undo.splice(0).forEach(fn => fn())
