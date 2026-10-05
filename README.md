@@ -19,6 +19,7 @@ https://k1ng0p.github.io/revenge-next-plugins/
 | **Platform Spoof** | Spoofs your Discord gateway platform so others see a different client icon (Desktop, Web, VR, Console) on your profile. | Written by [k1ng0p](https://github.com/k1ng0p) for Revenge Next |
 | **LastOnlineTracker** | Shows "Active X ago" under usernames in the member list once they go offline. | Original [Vencord plugin](https://github.com/k1ng0p/LastOnlineTracker) by [k1ng0p](https://github.com/k1ng0p), ported to Revenge Next |
 | **Instant Actions** | Skips confirmation prompts for destructive actions - deleting messages, embeds, channels, leaving servers and groups.| Written by [k1ng0p](https://github.com/k1ng0p) for Revenge Next |
+| **Plugin Browser** | Browse third-party repositories, see what they offer, and add them to Revenge Next.| Written by [k1ng0p](https://github.com/k1ng0p) for Revenge Next |
 | **Disable Call Idle** | Prevents automatic disconnects from idle DM calls.| Written by [k1ng0p](https://github.com/k1ng0p) for Revenge Next |
 
 
