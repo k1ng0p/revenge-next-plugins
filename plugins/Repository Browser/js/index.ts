@@ -1,3 +1,25 @@
+// edit this file on GitHub to add or remove repositories without releasing a new version of the plugin
+const REMOTE_LIST = 'https://raw.githubusercontent.com/k1ng0p/revenge-next-plugins/refs/heads/main/plugins/Repository%20Browser/js/plugin-browser-repos.json'
+
+const KEY = 'RepositoryBrowser'
+const DAY = 24 * 60 * 60 * 1000
+const AVATAR_SIZE = 32
+const AVATAR_TTL = 10 * 60 * 1000
+const POLL_INTERVAL = 15 * 60 * 1000
+const RECHECK_AFTER_FOCUS = 5 * 60 * 1000
+const MAX_REQUESTS = 4
+
+const SORTS: Record<string, string> = {
+	default: 'Default',
+	name: 'A-Z',
+	updated: 'Recently updated',
+	newest: 'Newest',
+	installed: 'Installed first',
+}
+
+const NOTICE =
+	'The repositories listed here are made by the community and are not reviewed by Revenge or Discord. A plugin can access your account and run code inside this app. Only install plugins from authors you trust, read the source before you install, and use them at your own risk.'
+
 type Repo = { url: string; source?: string; discord?: string }
 
 type ListedPlugin = {
@@ -20,43 +42,7 @@ type Listing = {
 	err?: string
 }
 
-type SeenEntry = {
-	sig: string
-	versions: Record<string, string>
-	news: Record<string, number>
-	updates: Record<string, { at: number; from: string; to: string }>
-	meta: Record<string, { added?: number; updated?: number }>
-}
-
-const REPOS: Repo[] = [
-	{ url: 'https://k1ng0p.github.io/revenge-next-plugins/', source: 'https://github.com/k1ng0p/revenge-next-plugins', discord: '641266820187160576' },
-	{ url: 'https://bleelblep.github.io/revenge-next-plugins/', source: 'https://github.com/bleelblep/revenge-next-plugins', discord: '119043674385547264' },
-	{ url: 'https://next.jarviscli.dev/', source: 'https://next.jarviscli.dev/', discord: '1356936317501571214' },
-	{ url: 'https://contrabag.github.io/revenge-next-plugins/', source: 'https://github.com/contrabag/revenge-next-plugins', discord: '780075200950566933' },
-	{ url: 'https://rn.kmmiio99o.dev/', source: 'https://git.gay/kmmiio99o/revenge-next-plugins', discord: '879393496627306587' },
-	{ url: 'https://next.tralwdwd.dev/', source: 'https://github.com/tralwdwd/revenge-next-plugins', discord: '1278723517436788897' },
-	{ url: 'https://mxtiy.knifecodez.workers.dev/', source: 'https://github.com/NoReplyUI5/revenge-next-plugins', discord: '1053918356375351386' },
-]
-
-const KEY = 'RepositoryBrowser'
-const DAY = 24 * 60 * 60 * 1000
-const AVATAR_SIZE = 32
-const AVATAR_TTL = 10 * 60 * 1000
-const POLL_INTERVAL = 15 * 60 * 1000
-const RECHECK_AFTER_FOCUS = 5 * 60 * 1000
-const MAX_REQUESTS = 4
-
-const SORTS: Record<string, string> = {
-	default: 'Default',
-	name: 'A-Z',
-	updated: 'Recently updated',
-	newest: 'Newest',
-	installed: 'Installed first',
-}
-
-const NOTICE =
-	'The repositories listed here are made by the community and are not reviewed by Revenge or Discord. A plugin can access your account and run code inside this app. Only install plugins from authors you trust, read the source before you install, and use them at your own risk.'
-
+let catalog: Repo[] = []
 const listings = new Map<string, Listing>()
 const toggled = new Map<string, boolean>()
 let store: any
@@ -284,7 +270,100 @@ function load(url: string) {
 // tracking new and updated plugins
 
 const save = (patch: Record<string, any>) =>
-	store.set({ seen: store.cache?.seen ?? {}, ack: store.cache?.ack ?? 0, snaps: store.cache?.snaps ?? {}, ...patch }, true)
+	store.set(
+		{
+			seen: store.cache?.seen ?? {},
+			ack: store.cache?.ack ?? 0,
+			snaps: store.cache?.snaps ?? {},
+			remote: store.cache?.remote ?? null,
+			known: store.cache?.known ?? null,
+			newRepos: store.cache?.newRepos ?? {},
+			...patch,
+		},
+		true,
+	)
+
+// the repository list
+
+function parseRepoList(json: any): Repo[] | null {
+	const items = Array.isArray(json) ? json : json?.repos
+	if (!Array.isArray(items)) return null
+
+	const repos: Repo[] = []
+	for (const item of items) {
+		const url = typeof item?.url === 'string' ? item.url.trim() : ''
+		if (!/^https:\/\/[^\s/]+/.test(url) || repos.some(repo => slash(repo.url) === slash(url))) continue
+
+		const repo: Repo = { url: slash(url) }
+		if (typeof item.source === 'string' && /^https:\/\//.test(item.source.trim())) repo.source = item.source.trim()
+		if (typeof item.discord === 'string' && /^\d{15,25}$/.test(item.discord.trim())) repo.discord = item.discord.trim()
+		repos.push(repo)
+	}
+	return repos.length ? repos : null
+}
+
+async function fetchRepoList() {
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const controller = new AbortController()
+		const timer = setTimeout(() => controller.abort(), 10000)
+		try {
+			const res = await fetch(`${REMOTE_LIST}?t=${Date.now()}`, { signal: controller.signal })
+			if (res.ok) return parseRepoList(await res.json())
+			if (res.status < 500) return null
+		} catch {
+			// network hiccup, try once more
+		} finally {
+			clearTimeout(timer)
+		}
+		if (attempt === 0) await sleep(800)
+	}
+	return null
+}
+
+// returns true when the list of repositories changed
+async function refreshCatalog() {
+	const next = await fetchRepoList()
+	if (!next) return false
+
+	const first = !store.cache?.known
+	const known = new Set<string>(store.cache?.known ?? next.map(repo => repo.url))
+	const newRepos: Record<string, number> = { ...store.cache?.newRepos }
+	let added = false
+	if (!first) {
+		for (const repo of next) {
+			if (known.has(repo.url)) continue
+			known.add(repo.url)
+			newRepos[repo.url] = Date.now()
+			added = true
+		}
+	}
+
+	const changed = JSON.stringify(next) !== JSON.stringify(catalog)
+	if (!changed && !first && !added) return false
+
+	const urls = new Set(next.map(repo => repo.url))
+	const keep = (all: Record<string, any>) => Object.fromEntries(Object.entries(all).filter(([url]) => urls.has(url)))
+	for (const url of Object.keys(newRepos)) if (!urls.has(url)) delete newRepos[url]
+
+	catalog = next
+	await save({
+		remote: { repos: next },
+		known: [...known],
+		newRepos,
+		seen: keep(store.cache?.seen ?? {}),
+		snaps: keep(store.cache?.snaps ?? {}),
+	})
+	return changed
+}
+
+
+type SeenEntry = {
+	sig: string
+	versions: Record<string, string>
+	news: Record<string, number>
+	updates: Record<string, { at: number; from: string; to: string }>
+	meta: Record<string, { added?: number; updated?: number }>
+}
 
 function diffRepo(old: SeenEntry | undefined, listing: Listing): SeenEntry {
 	const versions: Record<string, string> = {}
@@ -321,8 +400,15 @@ function diffRepo(old: SeenEntry | undefined, listing: Listing): SeenEntry {
 }
 
 async function checkUpdates(only?: string[], onEach?: () => void) {
-	const repos = only ? REPOS.filter(repo => only.includes(repo.url)) : REPOS
-	await Promise.all(repos.map(repo => load(repo.url).then(onEach)))
+	const inScope = (repo: Repo) => !only || only.includes(repo.url)
+	const loadAll = (list: Repo[]) => Promise.all(list.map(repo => load(repo.url).then(onEach)))
+
+	const listJob = only ? Promise.resolve(false) : refreshCatalog()
+	await loadAll(catalog.filter(inScope))
+	await listJob
+	// repositories that just showed up in the list
+	await loadAll(catalog.filter(repo => inScope(repo) && !listings.has(repo.url)))
+	const repos = catalog.filter(inScope)
 
 	const seen = { ...store.cache?.seen }
 	const snaps = { ...store.cache?.snaps }
@@ -354,8 +440,19 @@ function dismissAll(kind: 'news' | 'updates') {
 
 function unreadCount(seen: Record<string, SeenEntry>, ack: number) {
 	let total = 0
-	for (const repo of REPOS) total += Object.values(seen[repo.url]?.news ?? {}).filter(at => at > ack).length
+	for (const repo of catalog) total += Object.values(seen[repo.url]?.news ?? {}).filter(at => at > ack).length
 	return total
+}
+
+function newRepoCount(newRepos: Record<string, number>, ack: number) {
+	return Object.entries(newRepos).filter(([url, at]) => at > ack && catalog.some(repo => repo.url === url)).length
+}
+
+function dismissRepo(url: string) {
+	const newRepos = { ...store.cache?.newRepos }
+	if (!newRepos[url]) return
+	delete newRepos[url]
+	return save({ newRepos })
 }
 
 // talking to revenge
@@ -531,7 +628,9 @@ function Browser() {
 	const { Stack, TableRow, TableRowGroup, TableSwitchRow, Button, ContextMenu, IconButton, Text } = revenge.discord.design.Design
 	const { FormSwitch, SearchInput } = revenge.components
 
-	const seen: Record<string, SeenEntry> = store.use()?.seen ?? {}
+	const data = store.use()
+	const seen: Record<string, SeenEntry> = data?.seen ?? {}
+	const newRepos: Record<string, number> = data?.newRepos ?? {}
 	const [current, setCurrent] = React.useState<Repo | null>(null)
 	const [state, setState] = React.useState<RevengeState | null>(null)
 	const [installing, setInstalling] = React.useState('')
@@ -540,6 +639,7 @@ function Browser() {
 	const [refreshing, setRefreshing] = React.useState(false)
 	const [retrying, setRetrying] = React.useState('')
 	const [reloadingRepo, setReloadingRepo] = React.useState(false)
+	const [booting, setBooting] = React.useState(true)
 	const [epoch, setEpoch] = React.useState(() => freshAvatarEpoch())
 	const [, rerender] = React.useReducer((n: number) => n + 1, 0)
 
@@ -586,7 +686,7 @@ function Browser() {
 		checkUpdates(undefined, () => mounted && rerender()).then(() => {
 			if (!mounted) return
 			save({ ack: Date.now() })
-			rerender()
+			setBooting(false)
 		})
 		return () => {
 			mounted = false
@@ -738,7 +838,7 @@ function Browser() {
 	}
 
 	const feed = (kind: 'news' | 'updates', title: string) => {
-		const items = REPOS.flatMap(repo =>
+		const items = catalog.flatMap(repo =>
 			Object.entries<any>(seen[repo.url]?.[kind] ?? {}).map(([id, value]) => ({ repo, id, value, at: kind === 'news' ? (value as number) : value.at })),
 		)
 			.filter(item => {
@@ -848,6 +948,7 @@ function Browser() {
 		if (listing?.err) subLabel = friendlyError(listing.err)
 		else if (listing?.stale) subLabel = `Couldn't refresh, showing ${listing.saved ? `copy saved ${ago(listing.saved)}` : 'earlier data'}`
 		else if (listing) subLabel = listing.description || repo.url
+		if (newRepos[repo.url]) subLabel = `New repository\n${subLabel}`
 
 		let trailing
 		if (failed) trailing = h(Button, { text: 'Retry', size: 'sm', variant: 'secondary', loading: retrying === repo.url, onPress: () => retry(repo) })
@@ -859,20 +960,38 @@ function Browser() {
 			label: repoName(repo),
 			subLabel,
 			labelLineClamp: 1,
-			subLabelLineClamp: 2,
+			subLabelLineClamp: newRepos[repo.url] ? 3 : 2,
 			trailing,
 			arrow: true,
-			onPress: () => showRepo(repo),
+			onPress: () => {
+				dismissRepo(repo.url)
+				showRepo(repo)
+			},
 		})
+	}
+
+	const emptyList = () => {
+		const waiting = booting || refreshing
+		return h(
+			Stack,
+			{ key: 'empty', spacing: 12 },
+			h(Text, { variant: 'text-md/medium', color: 'text-muted' }, waiting ? 'Loading repositories...' : "Couldn't load the repository list. Check your connection and try again."),
+			!waiting && h(Button, { text: 'Try again', size: 'md', variant: 'secondary', onPress: refreshAll }),
+		)
 	}
 
 	const mainPage = () => {
 		const hits = needle
-			? sortPlugins(REPOS.flatMap(repo => (listings.get(repo.url)?.plugins ?? []).filter(pluginMatches).map(plugin => ({ repo, plugin }))))
+			? sortPlugins(catalog.flatMap(repo => (listings.get(repo.url)?.plugins ?? []).filter(pluginMatches).map(plugin => ({ repo, plugin }))))
 			: []
 
-		const shown = REPOS.filter(repo => matches(repoName(repo), listings.get(repo.url)?.description, repo.url))
-		const repos = sort === 'default' ? shown : shown.sort((a, b) => repoRank(b) - repoRank(a) || repoName(a).localeCompare(repoName(b)))
+		const shown = catalog.filter(repo => matches(repoName(repo), listings.get(repo.url)?.description, repo.url))
+		// new repositories stay on top until they are opened
+		const isNew = (repo: Repo) => (newRepos[repo.url] ? 1 : 0)
+		const repos =
+			sort === 'default'
+				? [...shown].sort((a, b) => isNew(b) - isNew(a))
+				: shown.sort((a, b) => repoRank(b) - repoRank(a) || repoName(a).localeCompare(repoName(b)))
 
 		let results = null
 		if (needle && !hits.length) results = noMatches()
@@ -893,8 +1012,9 @@ function Browser() {
 			results,
 			needle ? null : feed('news', 'New plugins'),
 			needle ? null : feed('updates', 'Recently updated'),
+			catalog.length ? null : emptyList(),
 			repos.length
-				? h(TableRowGroup, { key: 'all', title: 'Repositories', description: needle ? undefined : `${REPOS.length} repositories` }, repos.map(repoRow))
+				? h(TableRowGroup, { key: 'all', title: 'Repositories', description: needle ? undefined : `${catalog.length} repositories` }, repos.map(repoRow))
 				: null,
 		]
 	}
@@ -908,28 +1028,32 @@ function RepoCount() {
 	const { Text } = revenge.discord.design.Design
 	const data = store.use()
 	const unread = unreadCount(data?.seen ?? {}, data?.ack ?? 0)
+	const fresh = newRepoCount(data?.newRepos ?? {}, data?.ack ?? 0)
+	const bubble = (count: number, color: string) =>
+		h(
+			View,
+			{ style: { minWidth: 20, height: 20, paddingHorizontal: 6, borderRadius: 10, marginRight: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: color } },
+			h(Text, { variant: 'text-xs/bold', style: { color: '#FFFFFF' } }, count > 99 ? '99+' : String(count)),
+		)
 	return h(
 		View,
 		{ style: { flexDirection: 'row', alignItems: 'center' } },
-		unread > 0 &&
-			h(
-				View,
-				{ style: { minWidth: 20, height: 20, paddingHorizontal: 6, borderRadius: 10, marginRight: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F23F42' } },
-				h(Text, { variant: 'text-xs/bold', style: { color: '#FFFFFF' } }, unread > 99 ? '99+' : String(unread)),
-			),
-		h(Text, { variant: 'text-md/medium', color: 'text-muted' }, String(REPOS.length)),
+		fresh > 0 && bubble(fresh, '#5865F2'),
+		unread > 0 && bubble(unread, '#F23F42'),
+		h(Text, { variant: 'text-md/medium', color: 'text-muted' }, String(catalog.length)),
 	)
 }
 
 export default plugin({
-	jsonStorage: { load: true, default: { seen: {}, ack: 0, snaps: {} } },
+	jsonStorage: { load: true, default: { seen: {}, ack: 0, snaps: {}, remote: null, known: null, newRepos: {} } },
 	SettingsComponent: Browser,
 	start({ cleanup, plugin, jsonStorage }) {
 		if (plugin.startedLate) plugin.requireReload()
 		store = jsonStorage
 
+		catalog = parseRepoList(jsonStorage.cache?.remote?.repos) ?? []
 		for (const [url, snap] of Object.entries<any>(jsonStorage.cache?.snaps ?? {}))
-			if (REPOS.some(repo => repo.url === url)) listings.set(url, { ...snap.data, saved: snap.at })
+			if (catalog.some(repo => repo.url === url)) listings.set(url, { ...snap.data, saved: snap.at })
 
 		const settings = revenge.discord.modules.settings
 		const undo: (() => void)[] = []
