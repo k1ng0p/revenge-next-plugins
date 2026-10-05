@@ -4,7 +4,7 @@
 	"name": "Plugin Browser",
 	"description": "Browse third-party repositories, see what they offer, and add them to Revenge Next.",
 	"author": "k1ng_op",
-	"version": "1.2.2",
+	"version": "1.2.3",
 	"icon": "ic_browse_channel",
 	"dependencies": {
 		"revenge.api": {
