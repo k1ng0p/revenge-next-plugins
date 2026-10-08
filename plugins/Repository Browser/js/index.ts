@@ -71,7 +71,29 @@ let store: any
 let lastCheck = 0
 
 const h = (...args: any[]) => (revenge.react.React.createElement as any)(...args)
-const native = (name: string, args: any[] = []) => (revenge.modules.native.callNativeMethod as any)(name, args)
+// newer Revenge wraps replies as { result } or { error }, older builds return the value itself
+let wrapped = false
+
+async function native(name: string, args: any[] = []) {
+	const reply = await (revenge.modules.native.callNativeMethod as any)(name, args)
+	const keys = reply && typeof reply === 'object' && !Array.isArray(reply) ? Object.keys(reply) : []
+	if (keys.length === 1 && keys[0] === 'result') {
+		wrapped = true
+		return reply.result
+	}
+	if (keys.length === 1 && keys[0] === 'error') {
+		wrapped = true
+		throw Object.assign(new Error(reply.error?.message ?? reply.error?.code ?? 'Unknown error'), { code: reply.error?.code, details: reply.error?.details })
+	}
+	return reply
+}
+
+const asObject = (value: any): Record<string, any> => (value && typeof value === 'object' && !Array.isArray(value) ? value : {})
+const warningMessages = (plan: any): string[] =>
+	(plan?.warnings ?? [])
+		.filter((warning: any) => warning?.type !== 'upToDate')
+		.map((warning: any) => (typeof warning === 'string' ? warning : warning?.message))
+		.filter(Boolean)
 const asset = (name?: string) => (name ? revenge.assets.getAssetIdByName(name) : undefined)
 const slash = (url: string) => url.replace(/\/*$/, '/')
 const sleep = (ms: number) => new Promise(done => setTimeout(done, ms))
@@ -463,20 +485,32 @@ async function refreshAvailable() {
 	const found: AvailableUpdate[] = []
 	const checked = new Set<string>()
 
-	await Promise.all(
-		catalog.map(async repo => {
-			const entry = added.find(item => !item.internal && item.enabled && slash(item.url) === slash(repo.url))
-			if (!entry) return
-			// revenge plans updates from its own cached index, so refresh that first
-			await native('revenge.plugins.repos.refresh', [entry.url]).catch(() => {})
-			try {
-				for (const update of (await native('revenge.plugins.repos.listUpdates', [entry.url])) ?? []) found.push({ ...update, repo: repo.url })
+	const active = catalog.filter(repo => added.some(item => !item.internal && item.enabled && slash(item.url) === slash(repo.url)))
+	// revenge plans updates from its own cached index, so refresh that first
+	await Promise.all(active.map(repo => native('revenge.plugins.repos.refresh', [repo.url]).catch(() => {})))
+
+	if (wrapped) {
+		try {
+			const updates: any[] = (await native('revenge.plugins.listUpdates')) ?? []
+			for (const repo of active) {
 				checked.add(repo.url)
-			} catch {
-				// not indexed yet
+				for (const update of updates) if (!update.blocker && slash(update.repo ?? '') === slash(repo.url)) found.push({ ...update, repo: repo.url })
 			}
-		}),
-	)
+		} catch {
+			// not indexed yet
+		}
+	} else {
+		await Promise.all(
+			active.map(async repo => {
+				try {
+					for (const update of (await native('revenge.plugins.repos.listUpdates', [repo.url])) ?? []) found.push({ ...update, repo: repo.url })
+					checked.add(repo.url)
+				} catch {
+					// not indexed yet
+				}
+			}),
+		)
+	}
 
 	for (const [id, info] of available) if (checked.has(info.repo) || !catalog.some(repo => repo.url === info.repo)) available.delete(id)
 	for (const info of found) available.set(info.id, info)
@@ -511,24 +545,41 @@ function dismissAll(kind: 'news' | 'updates') {
 }
 
 function unreadCount(data: any) {
-	const { seen = {}, ack = 0, alerts = {}, updatesSeen = {} } = data ?? {}
+	const seen = asObject(data?.seen)
+	const alerts = asObject(data?.alerts)
+	const updatesSeen = asObject(data?.updatesSeen)
+	const ack = typeof data?.ack === 'number' ? data.ack : 0
 	let total = 0
 	for (const repo of catalog) {
 		const mode: AlertMode = alerts[repo.url] ?? 'news'
-		if (mode === 'all' || mode === 'news') total += Object.values<number>(seen[repo.url]?.news ?? {}).filter(at => at > ack).length
-		if (mode === 'all' || mode === 'updates') total += Object.values<number>(updatesSeen[repo.url] ?? {}).filter(at => at > ack).length
+		if (mode === 'all' || mode === 'news') total += Object.values<number>(asObject(seen[repo.url]?.news)).filter(at => at > ack).length
+		if (mode === 'all' || mode === 'updates') total += Object.values<number>(asObject(updatesSeen[repo.url])).filter(at => at > ack).length
 	}
 	return total
 }
 
-const setAlertMode = (url: string, mode: AlertMode) => save({ alerts: { ...store.cache?.alerts, [url]: mode } })
+const setAlertMode = (url: string, mode: AlertMode) => save({ alerts: { ...asObject(store.cache?.alerts), [url]: mode } })
 
-function newRepoCount(newRepos: Record<string, number>, ack: number) {
-	return Object.entries(newRepos).filter(([url, at]) => at > ack && catalog.some(repo => repo.url === url)).length
+function newRepoCount(data: any) {
+	const ack = typeof data?.ack === 'number' ? data.ack : 0
+	return Object.entries<number>(asObject(data?.newRepos)).filter(([url, at]) => at > ack && catalog.some(repo => repo.url === url)).length
+}
+
+function repairStore() {
+	const stored = asObject(store.cache)
+	return save({
+		seen: asObject(stored.seen),
+		snaps: asObject(stored.snaps),
+		newRepos: asObject(stored.newRepos),
+		alerts: asObject(stored.alerts),
+		updatesSeen: stored.updatesSeen && typeof stored.updatesSeen === 'object' ? stored.updatesSeen : null,
+		known: Array.isArray(stored.known) ? stored.known : null,
+		ack: typeof stored.ack === 'number' ? stored.ack : 0,
+	})
 }
 
 function dismissRepo(url: string) {
-	const newRepos = { ...store.cache?.newRepos }
+	const newRepos = { ...asObject(store.cache?.newRepos) }
 	if (!newRepos[url]) return
 	delete newRepos[url]
 	return save({ newRepos })
@@ -537,7 +588,12 @@ function dismissRepo(url: string) {
 const repoList = (): Promise<any[]> => native('revenge.plugins.repos.list')
 
 async function readState() {
-	const [repos, plugins, saved] = await Promise.all([repoList(), native('revenge.plugins.list'), native('revenge.plugins.states.read')])
+	const [repos, plugins, saved, slots] = await Promise.all([
+		repoList(),
+		native('revenge.plugins.list'),
+		native('revenge.plugins.states.read'),
+		wrapped ? native('revenge.plugins.states.getSlots').catch(() => null) : null,
+	])
 	const installed = new Map<string, { version: string; settings: boolean }>()
 	for (const plugin of plugins ?? []) {
 		if (plugin.internal) continue
@@ -546,8 +602,9 @@ async function readState() {
 			settings: !!plugin.script?.includes('SettingsComponent'),
 		})
 	}
-	const enabled: Record<string, { enabled?: boolean; pendingReload?: boolean }> = saved?.states ?? {}
-	return { repos: repos as any[], installed, enabled }
+	// newer builds keep one set of states per slot
+	const enabled: Record<string, { enabled?: boolean; pendingReload?: boolean }> = wrapped ? (asObject(saved)[slots?.active] ?? {}) : (saved?.states ?? {})
+	return { repos: (repos ?? []) as any[], installed, enabled }
 }
 
 type RevengeState = Awaited<ReturnType<typeof readState>>
@@ -567,7 +624,7 @@ function openPluginSettings(id: string) {
 async function uninstall(plugin: ListedPlugin) {
 	if (!(await confirm('Uninstall plugin?', `${plugin.name} and all of its data will be removed. This cannot be undone.`, 'Uninstall', 'destructive'))) return false
 	try {
-		await native('revenge.plugins.setEnabled', [plugin.id, false]).catch(() => {})
+		await native('revenge.plugins.setEnabled', [plugin.id, false, false]).catch(() => {})
 		await native('revenge.plugins.uninstall', [plugin.id])
 		askReload('Uninstalled. Reload to apply it.')
 		return true
@@ -583,11 +640,11 @@ async function install(repoUrl: string, plugin: ListedPlugin) {
 		if (!known?.enabled) await putRepos(repoUrl, true)
 		const target = (await repoList()).find(repo => slash(repo.url) === slash(repoUrl))?.url ?? repoUrl
 
-		const plan = await native('revenge.plugins.planInstall', [plugin.id, null, null, [target]])
+		const plan = await native('revenge.plugins.planInstall', wrapped ? [plugin.id, { repos: [target] }] : [plugin.id, null, null, [target]])
 		const others = plan.actions.filter((action: any) => action.id !== plugin.id).map((action: any) => `${action.id} ${action.version}`)
 		const lines = [`${plugin.name} ${plan.actions.find((action: any) => action.id === plugin.id)?.version ?? ''}`]
 		if (others.length) lines.push(`Also installs: ${others.join(', ')}`)
-		if (plan.warnings.length) lines.push(plan.warnings.join('\n'))
+		if (warningMessages(plan).length) lines.push(warningMessages(plan).join('\n'))
 		if (!(await confirm('Install plugin?', lines.join('\n\n')))) return false
 
 		const result = await native('revenge.plugins.install', [plan])
@@ -604,10 +661,11 @@ type PendingUpdate = { id: string; name: string; installed: string; available: s
 async function updatePlugins(updates: PendingUpdate[]) {
 	try {
 		const plans = []
-		for (const update of updates) plans.push(await native('revenge.plugins.planInstall', [update.id, null, update.channel, null]))
+		for (const update of updates)
+			plans.push(await native('revenge.plugins.planInstall', wrapped ? [update.id, { skipMissingOptionals: true }] : [update.id, null, update.channel, null]))
 
 		const lines = updates.map(update => `${update.name} ${update.installed} to ${update.available}`)
-		const warnings = plans.flatMap(plan => plan.warnings ?? [])
+		const warnings = plans.flatMap(warningMessages)
 		if (warnings.length) lines.push(warnings.join('\n'))
 		const title = updates.length === 1 ? 'Update plugin?' : `Update ${updates.length} plugins?`
 		if (!(await confirm(title, lines.join('\n'), 'Update'))) return false
@@ -622,10 +680,23 @@ async function updatePlugins(updates: PendingUpdate[]) {
 	}
 }
 
+async function writeEnabled(id: string, on: boolean) {
+	const res = await native('revenge.plugins.setEnabled', [id, on, on])
+	// older builds answer with the problem instead of rejecting
+	if (res?.code)
+		throw Object.assign(new Error(res.problems?.map((p: any) => `${p.id} (${p.required})`).join(', ') ?? res.code), { code: res.code, details: { problems: res.problems } })
+}
+
 async function toggle(id: string, on: boolean) {
 	try {
-		const res = await native('revenge.plugins.setEnabled', [id, on])
-		if (res?.code) throw new Error(res.problems?.map((p: any) => `${p.id} (${p.required})`).join(', ') ?? res.code)
+		try {
+			await writeEnabled(id, on)
+		} catch (e: any) {
+			const disabled = on ? (e?.details?.problems ?? []).filter((problem: any) => problem.installed && !problem.enabled) : []
+			if (!disabled.length) throw e
+			for (const dependency of disabled) await native('revenge.plugins.setEnabled', [dependency.id, true, false])
+			await writeEnabled(id, on)
+		}
 		askReload(`${on ? 'Enabled' : 'Disabled'}. Reload to apply it.`)
 		return true
 	} catch (e) {
@@ -1367,8 +1438,14 @@ function RepoCount() {
 	const { View } = revenge.react.ReactNative
 	const { Text } = revenge.discord.design.Design
 	const data = store.use()
-	const unread = unreadCount(data)
-	const fresh = newRepoCount(data?.newRepos ?? {}, data?.ack ?? 0)
+	let unread = 0
+	let fresh = 0
+	try {
+		unread = unreadCount(data)
+		fresh = newRepoCount(data)
+	} catch {
+		// this sits in Discord's own settings list, a bad badge must never break it
+	}
 	const bubble = (count: number, color: string) =>
 		h(
 			View,
@@ -1390,6 +1467,7 @@ export default plugin({
 	start({ cleanup, plugin, jsonStorage }) {
 		if (plugin.startedLate) plugin.requireReload()
 		store = jsonStorage
+		repairStore()
 
 		catalog = parseRepoList(jsonStorage.cache?.remote?.repos) ?? []
 		for (const [url, snap] of Object.entries<any>(jsonStorage.cache?.snaps ?? {})) if (catalog.some(repo => repo.url === url)) listings.set(url, { ...snap.data, saved: snap.at })
