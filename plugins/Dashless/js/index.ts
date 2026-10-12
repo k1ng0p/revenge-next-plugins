@@ -1,8 +1,71 @@
-const fix = (n: any): any => {
-	if (typeof n === 'string') return n.replace(/-/g, ' ')
-	if (Array.isArray(n)) return n.map(fix)
-	if (n?.props?.children) return { ...n, props: { ...n.props, children: fix(n.props.children) } }
-	return n
+import { getModules } from '@revenge-mod/modules/finders'
+import { withProps } from '@revenge-mod/modules/finders/filters'
+import { after, instead } from '@revenge-mod/patcher'
+import { cloneElement, createElement, isValidElement } from 'react'
+import type { FC, ReactElement, ReactNode } from 'react'
+
+interface Channel {
+	name?: string
+}
+
+interface RowProps {
+	channel?: Channel | null
+}
+
+type TextChannel = { type(props: RowProps): ReactNode }
+
+const renamed = new WeakMap<Channel, Channel>()
+const wrapped = new WeakMap<FC<any>, FC<any>>()
+
+const dashless = (channel: Channel) => {
+	if (!channel.name?.includes('-')) return channel
+
+	const copy: Channel =
+		renamed.get(channel) ??
+		Object.create(channel, { name: { value: channel.name.replace(/-/g, ' ') } })
+	renamed.set(channel, copy)
+	return copy
+}
+
+const wrapThread = (Thread: FC<any>) => {
+	let Wrapped = wrapped.get(Thread)
+	if (!Wrapped) {
+		Wrapped = props => {
+			const tree = Thread(props)
+			return isValidElement<RowProps>(tree) && tree.props.channel
+				? cloneElement(tree, { channel: dashless(tree.props.channel) })
+				: tree
+		}
+		wrapped.set(Thread, Wrapped)
+	}
+	return Wrapped
+}
+
+const isRow = (el: ReactElement<any>) =>
+	'isSuggestedSection' in el.props &&
+	el.props.channel != null &&
+	typeof (el.type as { type?: unknown })?.type === 'function'
+
+const isThread = (el: ReactElement<any>) =>
+	'threadId' in el.props && !('channel' in el.props) && typeof el.type === 'function'
+
+const findRow = (node: ReactNode): ReactElement | undefined => {
+	if (Array.isArray(node)) return node.map(findRow).find(Boolean)
+	if (!isValidElement<{ children?: ReactNode }>(node)) return
+	return isRow(node) ? node : findRow(node.props.children)
+}
+
+const swapThreads = (node: ReactNode): ReactNode => {
+	if (Array.isArray(node)) return node.map(swapThreads)
+	if (!isValidElement<{ children?: ReactNode }>(node)) return node
+	if (isThread(node))
+		return createElement(wrapThread(node.type as FC<any>), { key: node.key, ...node.props })
+	if (!node.props.children) return node
+
+	const children = swapThreads(node.props.children)
+	return Array.isArray(children)
+		? cloneElement(node, undefined, ...children)
+		: cloneElement(node, undefined, children)
 }
 
 export default plugin({
@@ -12,15 +75,42 @@ export default plugin({
 			return
 		}
 
-		const { View } = revenge.react.ReactNative
-		const off = revenge.patcher.after(View, 'render', (...a: any[]) => {
-			const res = a.find(x => x?.$$typeof)
-			if (!res) return
-			try {
-				return fix(res)
-			} catch {}
-		})
+		let unpatchRow: (() => unknown) | undefined
 
-		cleanup(off, () => plugin.requireReload())
+		cleanup(
+			// modules/channel_list_v2/native/renderRedesignChannelListItem.tsx
+			getModules(
+				withProps<{ renderChannelListItem(...args: any[]): ReactNode }>(
+					'renderChannelListItem',
+				),
+				ChannelListItem => {
+					const unpatchItem = after(ChannelListItem, 'renderChannelListItem', tree => {
+						try {
+							const row = unpatchRow ? undefined : findRow(tree)
+							if (row)
+								unpatchRow = instead(
+									row.type as unknown as TextChannel,
+									'type',
+									function (args, orig) {
+										const [props, ...rest] = args
+										const channel = props.channel && dashless(props.channel)
+										return Reflect.apply(orig, this, [{ ...props, channel }, ...rest])
+									},
+								)
+
+							return swapThreads(tree)
+						} catch (e) {
+							plugin.reportError(String(e))
+							return tree
+						}
+					})
+
+					cleanup(unpatchItem, () => unpatchRow?.())
+				},
+			),
+		)
+	},
+	stop({ plugin }) {
+		plugin.requireReload()
 	},
 })
