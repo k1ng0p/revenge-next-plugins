@@ -4,7 +4,7 @@
 	"name": "Dashless",
 	"description": "Changes dashes in text channel names to spaces.",
 	"author": "k1ng_op",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"icon": "ChannelListIcon",
 	"dependencies": {
 		"revenge.api": {
