@@ -64,11 +64,12 @@ type Listing = {
 
 let catalog: Repo[] = []
 const listings = new Map<string, Listing>()
-const toggled = new Map<string, boolean>()
+const toggled = new Map<string, { value: boolean; before: boolean }>()
 const available = new Map<string, AvailableUpdate>()
 const pendingReload = new Set<string>()
 let store: any
 let lastCheck = 0
+let ready: Promise<unknown> = Promise.resolve()
 
 const h = (...args: any[]) => (revenge.react.React.createElement as any)(...args)
 // newer Revenge wraps replies as { result } or { error }, older builds return the value itself
@@ -97,8 +98,9 @@ const warningMessages = (plan: any): string[] =>
 const asset = (name?: string) => (name ? revenge.assets.getAssetIdByName(name) : undefined)
 const slash = (url: string) => url.replace(/\/*$/, '/')
 const sleep = (ms: number) => new Promise(done => setTimeout(done, ms))
-const isRemote = (value?: string): value is string => !!value && /^(data|https):/.test(value)
+const isRemote = (value?: string): value is string => !!value && /^https:/.test(value)
 const errorMessage = (e: any): string => e?.message ?? String(e)
+const hostOf = (url: string) => url.match(/^https:\/\/([^/]+)/)?.[1] ?? url
 const formatSize = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`)
 
 const ago = (time: number) => {
@@ -261,7 +263,7 @@ async function fetchIndex(url: string, attempt: number, timeout: number) {
 		const res = await fetch(`${slash(url)}index.json${query}`, { signal: controller.signal })
 		if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { permanent: res.status < 500 && res.status !== 429 })
 		const json = await res.json()
-		if (typeof json?.plugins !== 'object') throw Object.assign(new Error('Not a Revenge repository'), { permanent: true })
+		if (!json?.plugins || typeof json.plugins !== 'object' || Array.isArray(json.plugins)) throw Object.assign(new Error('Not a Revenge repository'), { permanent: true })
 		return json
 	} finally {
 		clearTimeout(timer)
@@ -283,27 +285,56 @@ async function fetchRepo(url: string) {
 	throw lastError
 }
 
-function toListing(json: any): Listing {
+const text = (value: any, max: number) => (typeof value === 'string' || typeof value === 'number' ? String(value).slice(0, max) : undefined)
+const shortLink = (value: any) => (typeof value === 'string' && value.length <= 300 ? value : undefined)
+
+// repositories are written by other people, so keep only short, plain values
+function cleanListing(raw: any, fallbackName: string): Listing {
+	const plugins: ListedPlugin[] = []
+	for (const item of Array.isArray(raw?.plugins) ? raw.plugins : []) {
+		const id = text(item?.id, 100)
+		if (!id || plugins.length >= 300) continue
+		plugins.push({
+			id,
+			name: text(item.name, 80) || id,
+			description: text(item.description, 400),
+			author: text(item.author, 80),
+			icon: shortLink(item.icon),
+			version: text(item.version, 40),
+			size: typeof item.size === 'number' && Number.isFinite(item.size) ? item.size : undefined,
+			requires: (Array.isArray(item.requires) ? item.requires : [])
+				.map((entry: any) => text(entry, 100))
+				.filter(Boolean)
+				.slice(0, 20) as string[],
+		})
+	}
 	return {
-		at: Date.now(),
-		name: json.name || '',
-		description: json.description,
-		icon: json.icon,
-		plugins: Object.entries<any>(json.plugins).map(([id, plugin]) => {
+		at: typeof raw?.at === 'number' ? raw.at : undefined,
+		name: text(raw?.name, 80) || fallbackName,
+		description: text(raw?.description, 300),
+		icon: shortLink(raw?.icon),
+		plugins,
+	}
+}
+
+function toListing(url: string, json: any): Listing {
+	const plugins = Object.entries<any>(json.plugins)
+		.filter(([, plugin]) => plugin && typeof plugin === 'object')
+		.map(([id, plugin]) => {
 			const version = plugin.channels?.latest
 			const build = plugin.versions?.[version]
 			return {
 				id,
-				name: plugin.name ?? id,
+				name: plugin.name,
 				description: plugin.description,
 				author: plugin.author,
 				icon: plugin.icon,
 				version,
 				size: build?.size,
-				requires: Object.entries<any>(build?.dependencies ?? {}).map(([dep, info]) => `${dep} ${info.version}${info.optional ? ' (optional)' : ''}`),
+				requires: Object.entries<any>(build?.dependencies ?? {}).map(([dep, info]) => `${dep} ${info?.version ?? ''}${info?.optional ? ' (optional)' : ''}`.trim()),
 			}
-		}),
-	}
+		})
+	return cleanListing({ at: Date.now(), name: json.name, description: json.description, icon: json.icon, plugins }, url)
 }
 
 function load(url: string) {
@@ -313,7 +344,11 @@ function load(url: string) {
 	const job = takeSlot()
 		.then(() => fetchRepo(url))
 		.then(json => {
-			listings.set(url, { ...toListing(json), name: json.name || url })
+			const fresh = toListing(url, json)
+			const previous = listings.get(url)
+			// one empty reply from a repository that had plugins is more likely an outage than a cleanup
+			if (!fresh.plugins.length && previous?.plugins.length && !previous.err) listings.set(url, { ...previous, stale: 'Repository sent an empty list' })
+			else listings.set(url, fresh)
 		})
 		.catch((e: any) => {
 			const err = e?.name === 'AbortError' ? 'Request timed out' : errorMessage(e)
@@ -328,21 +363,44 @@ function load(url: string) {
 	return job
 }
 
-const save = (patch: Record<string, any>) =>
-	store.set(
-		{
-			seen: store.cache?.seen ?? {},
-			ack: store.cache?.ack ?? 0,
-			snaps: store.cache?.snaps ?? {},
-			remote: store.cache?.remote ?? null,
-			known: store.cache?.known ?? null,
-			newRepos: store.cache?.newRepos ?? {},
-			updatesSeen: store.cache?.updatesSeen ?? null,
-			alerts: store.cache?.alerts ?? {},
-			...patch,
-		},
-		true,
-	)
+type StoreData = {
+	seen: Record<string, SeenEntry>
+	ack: number
+	snaps: Record<string, { at: number; data: Listing }>
+	remote: { repos: Repo[] } | null
+	known: string[] | null
+	newRepos: Record<string, number>
+	updatesSeen: Record<string, Record<string, number>> | null
+	alerts: Record<string, AlertMode>
+}
+
+// the storage file is read in the background, anything written before that would replace it with defaults
+async function whenLoaded() {
+	for (let waited = 0; store.loaded === false && waited < 5000; waited += 25) await sleep(25)
+	if (store.loaded === false) await store.get?.()
+}
+
+function readStore(): StoreData {
+	const raw = asObject(store.cache)
+	return {
+		seen: asObject(raw.seen),
+		ack: typeof raw.ack === 'number' ? raw.ack : 0,
+		snaps: asObject(raw.snaps),
+		remote: raw.remote && typeof raw.remote === 'object' ? raw.remote : null,
+		known: Array.isArray(raw.known) ? raw.known : null,
+		newRepos: asObject(raw.newRepos),
+		updatesSeen: raw.updatesSeen && typeof raw.updatesSeen === 'object' ? raw.updatesSeen : null,
+		alerts: asObject(raw.alerts),
+	}
+}
+
+async function update(change: (data: StoreData) => Partial<StoreData>) {
+	await whenLoaded()
+	const next = { ...readStore(), ...change(readStore()) }
+	if (JSON.stringify(next) !== JSON.stringify(store.cache)) await store.set(next, true)
+}
+
+const save = (patch: Partial<StoreData>) => update(() => patch)
 
 function parseRepoList(json: any): Repo[] | null {
 	const items = Array.isArray(json) ? json : json?.repos
@@ -383,33 +441,25 @@ async function refreshCatalog() {
 	const next = await fetchRepoList()
 	if (!next) return false
 
-	const first = !store.cache?.known
-	const known = new Set<string>(store.cache?.known ?? next.map(repo => repo.url))
-	const newRepos: Record<string, number> = { ...store.cache?.newRepos }
-	let added = false
-	if (!first) {
-		for (const repo of next) {
-			if (known.has(repo.url)) continue
-			known.add(repo.url)
-			newRepos[repo.url] = Date.now()
-			added = true
-		}
-	}
-
 	const changed = JSON.stringify(next) !== JSON.stringify(catalog)
-	if (!changed && !first && !added) return false
-
-	const urls = new Set(next.map(repo => repo.url))
-	const keep = (all: Record<string, any>) => Object.fromEntries(Object.entries(all).filter(([url]) => urls.has(url)))
-	for (const url of Object.keys(newRepos)) if (!urls.has(url)) delete newRepos[url]
-
 	catalog = next
-	await save({
-		remote: { repos: next },
-		known: [...known],
-		newRepos,
-		seen: keep(store.cache?.seen ?? {}),
-		snaps: keep(store.cache?.snaps ?? {}),
+	await update(data => {
+		const first = !data.known
+		const known = new Set(data.known ?? next.map(repo => repo.url))
+		const newRepos = { ...data.newRepos }
+		if (!first) {
+			for (const repo of next) {
+				if (known.has(repo.url)) continue
+				known.add(repo.url)
+				newRepos[repo.url] = Date.now()
+			}
+		}
+
+		const urls = new Set(next.map(repo => repo.url))
+		const keep = (all: Record<string, any>) => Object.fromEntries(Object.entries(all).filter(([url]) => urls.has(url)))
+		for (const url of Object.keys(newRepos)) if (!urls.has(url)) delete newRepos[url]
+
+		return { remote: { repos: next }, known: [...known], newRepos, seen: keep(data.seen), snaps: keep(data.snaps) }
 	})
 	return changed
 }
@@ -420,6 +470,7 @@ type SeenEntry = {
 	news: Record<string, number>
 	updates: Record<string, { at: number; from: string; to: string }>
 	meta: Record<string, { added?: number; updated?: number }>
+	ever?: string[]
 }
 
 function diffRepo(old: SeenEntry | undefined, listing: Listing): SeenEntry {
@@ -427,17 +478,19 @@ function diffRepo(old: SeenEntry | undefined, listing: Listing): SeenEntry {
 	for (const plugin of listing.plugins) versions[plugin.id] = plugin.version ?? ''
 	const sig = JSON.stringify(Object.entries(versions).sort())
 
-	if (!old) return { sig, versions, news: {}, updates: {}, meta: {} }
+	if (!old) return { sig, versions, news: {}, updates: {}, meta: {}, ever: Object.keys(versions) }
 	if (old.sig === sig) return old
 
 	const now = Date.now()
 	const news = { ...old.news }
 	const updates = { ...old.updates }
 	const meta = { ...old.meta }
+	const ever = new Set(old.ever ?? Object.keys(old.versions))
 
 	for (const plugin of listing.plugins) {
 		const before = old.versions[plugin.id]
 		if (before === undefined) {
+			if (ever.has(plugin.id)) continue
 			news[plugin.id] = now
 			meta[plugin.id] = { ...meta[plugin.id], added: now }
 		} else if (before !== versions[plugin.id]) {
@@ -453,10 +506,12 @@ function diffRepo(old: SeenEntry | undefined, listing: Listing): SeenEntry {
 		delete meta[id]
 	}
 
-	return { sig, versions, news, updates, meta }
+	for (const id of Object.keys(versions)) ever.add(id)
+	return { sig, versions, news, updates, meta, ever: [...ever].slice(-1000) }
 }
 
 async function checkUpdates(only?: string[], onEach?: () => void) {
+	await ready
 	const inScope = (repo: Repo) => !only || only.includes(repo.url)
 	const loadAll = (list: Repo[]) => Promise.all(list.map(repo => load(repo.url).then(onEach)))
 
@@ -466,21 +521,24 @@ async function checkUpdates(only?: string[], onEach?: () => void) {
 	await loadAll(catalog.filter(repo => inScope(repo) && !listings.has(repo.url)))
 	const repos = catalog.filter(inScope)
 
-	const seen = { ...store.cache?.seen }
-	const snaps = { ...store.cache?.snaps }
-	for (const repo of repos) {
-		const listing = listings.get(repo.url)
-		if (!listing || listing.err || listing.stale) continue
-		snaps[repo.url] = { at: Date.now(), data: listing }
-		seen[repo.url] = diffRepo(seen[repo.url], listing)
-	}
-
-	const updatesSeen = only ? null : await refreshAvailable().catch(() => null)
+	const checked = only ? null : await refreshAvailable().catch(() => null)
 	lastCheck = Date.now()
-	await save(updatesSeen ? { seen, snaps, updatesSeen } : { seen, snaps })
+	await update(data => {
+		const seen = { ...data.seen }
+		const snaps = { ...data.snaps }
+		for (const repo of repos) {
+			const listing = listings.get(repo.url)
+			if (!listing || listing.err || listing.stale) continue
+			seen[repo.url] = diffRepo(seen[repo.url], listing)
+			if (!sameContent(snaps[repo.url]?.data, listing)) snaps[repo.url] = { at: Date.now(), data: listing }
+		}
+		return checked ? { seen, snaps, updatesSeen: trackUpdates(data.updatesSeen, checked) } : { seen, snaps }
+	})
 }
 
-async function refreshAvailable() {
+const sameContent = (a?: Listing, b?: Listing) => JSON.stringify({ ...a, at: 0, saved: 0 }) === JSON.stringify({ ...b, at: 0, saved: 0 })
+
+async function refreshAvailable(): Promise<Set<string>> {
 	const added: any[] = await repoList().catch(() => [])
 	const found: AvailableUpdate[] = []
 	const checked = new Set<string>()
@@ -515,8 +573,12 @@ async function refreshAvailable() {
 	for (const [id, info] of available) if (checked.has(info.repo) || !catalog.some(repo => repo.url === info.repo)) available.delete(id)
 	for (const info of found) available.set(info.id, info)
 
-	const first = !store.cache?.updatesSeen
-	const updatesSeen: Record<string, Record<string, number>> = { ...store.cache?.updatesSeen }
+	return checked
+}
+
+function trackUpdates(previous: StoreData['updatesSeen'], checked: Set<string>) {
+	const first = !previous
+	const updatesSeen = { ...previous }
 	for (const url of checked) {
 		const bucket: Record<string, number> = {}
 		for (const info of available.values()) {
@@ -530,18 +592,17 @@ async function refreshAvailable() {
 }
 
 function dismiss(kind: 'news' | 'updates', url: string, id: string) {
-	const seen = store.cache?.seen ?? {}
-	const entry = seen[url]
-	if (!entry?.[kind]?.[id]) return
-	const remaining = { ...entry[kind] }
-	delete remaining[id]
-	return save({ seen: { ...seen, [url]: { ...entry, [kind]: remaining } } })
+	return update(data => {
+		const entry = data.seen[url]
+		if (!entry?.[kind]?.[id]) return {}
+		const remaining = { ...entry[kind] }
+		delete remaining[id]
+		return { seen: { ...data.seen, [url]: { ...entry, [kind]: remaining } } }
+	})
 }
 
 function dismissAll(kind: 'news' | 'updates') {
-	const seen = store.cache?.seen ?? {}
-	const cleared = Object.fromEntries(Object.entries<any>(seen).map(([url, entry]) => [url, { ...entry, [kind]: {} }]))
-	return save({ seen: cleared })
+	return update(data => ({ seen: Object.fromEntries(Object.entries(data.seen).map(([url, entry]) => [url, { ...entry, [kind]: {} }])) }))
 }
 
 function unreadCount(data: any) {
@@ -558,31 +619,19 @@ function unreadCount(data: any) {
 	return total
 }
 
-const setAlertMode = (url: string, mode: AlertMode) => save({ alerts: { ...asObject(store.cache?.alerts), [url]: mode } })
+const setAlertMode = (url: string, mode: AlertMode) => update(data => ({ alerts: { ...data.alerts, [url]: mode } }))
 
 function newRepoCount(data: any) {
 	const ack = typeof data?.ack === 'number' ? data.ack : 0
 	return Object.entries<number>(asObject(data?.newRepos)).filter(([url, at]) => at > ack && catalog.some(repo => repo.url === url)).length
 }
 
-function repairStore() {
-	const stored = asObject(store.cache)
-	return save({
-		seen: asObject(stored.seen),
-		snaps: asObject(stored.snaps),
-		newRepos: asObject(stored.newRepos),
-		alerts: asObject(stored.alerts),
-		updatesSeen: stored.updatesSeen && typeof stored.updatesSeen === 'object' ? stored.updatesSeen : null,
-		known: Array.isArray(stored.known) ? stored.known : null,
-		ack: typeof stored.ack === 'number' ? stored.ack : 0,
-	})
-}
-
 function dismissRepo(url: string) {
-	const newRepos = { ...asObject(store.cache?.newRepos) }
-	if (!newRepos[url]) return
-	delete newRepos[url]
-	return save({ newRepos })
+	return update(data => {
+		const newRepos = { ...data.newRepos }
+		delete newRepos[url]
+		return { newRepos }
+	})
 }
 
 const repoList = (): Promise<any[]> => native('revenge.plugins.repos.list')
@@ -602,14 +651,21 @@ async function readState() {
 			settings: !!plugin.script?.includes('SettingsComponent'),
 		})
 	}
-	// newer builds keep one set of states per slot
 	const enabled: Record<string, { enabled?: boolean; pendingReload?: boolean }> = wrapped ? (asObject(saved)[slots?.active] ?? {}) : (saved?.states ?? {})
 	return { repos: (repos ?? []) as any[], installed, enabled }
 }
 
 type RevengeState = Awaited<ReturnType<typeof readState>>
 
-async function putRepos(url: string, enabled: boolean) {
+let repoWrites: Promise<unknown> = Promise.resolve()
+
+function putRepos(url: string, enabled: boolean) {
+	const job = repoWrites.then(() => writeRepos(url, enabled))
+	repoWrites = job.catch(() => {})
+	return job
+}
+
+async function writeRepos(url: string, enabled: boolean) {
 	const list = (await repoList()).filter(repo => !repo.internal).map(repo => ({ url: repo.url, enabled: slash(repo.url) === slash(url) ? enabled : repo.enabled }))
 	if (!list.some(repo => slash(repo.url) === slash(url))) list.push({ url, enabled })
 	await native('revenge.plugins.repos.set', [list])
@@ -637,10 +693,9 @@ async function uninstall(plugin: ListedPlugin) {
 async function install(repoUrl: string, plugin: ListedPlugin) {
 	try {
 		const known = (await repoList()).find(repo => slash(repo.url) === slash(repoUrl))
-		if (!known?.enabled) await putRepos(repoUrl, true)
-		const target = (await repoList()).find(repo => slash(repo.url) === slash(repoUrl))?.url ?? repoUrl
+		if (!known?.enabled) throw new Error('Add this repository to Revenge first')
 
-		const plan = await native('revenge.plugins.planInstall', wrapped ? [plugin.id, { repos: [target] }] : [plugin.id, null, null, [target]])
+		const plan = await native('revenge.plugins.planInstall', wrapped ? [plugin.id, { repos: [known.url] }] : [plugin.id, null, null, [known.url]])
 		const others = plan.actions.filter((action: any) => action.id !== plugin.id).map((action: any) => `${action.id} ${action.version}`)
 		const lines = [`${plugin.name} ${plan.actions.find((action: any) => action.id === plugin.id)?.version ?? ''}`]
 		if (others.length) lines.push(`Also installs: ${others.join(', ')}`)
@@ -648,7 +703,7 @@ async function install(repoUrl: string, plugin: ListedPlugin) {
 		if (!(await confirm('Install plugin?', lines.join('\n\n')))) return false
 
 		const result = await native('revenge.plugins.install', [plan])
-		if (result.pending.length) askReload('Installed. Reload to apply it.')
+		if (result?.pending?.length) askReload('Installed. Reload to apply it.')
 		return true
 	} catch (e) {
 		showError(e)
@@ -659,30 +714,33 @@ async function install(repoUrl: string, plugin: ListedPlugin) {
 type PendingUpdate = { id: string; name: string; installed: string; available: string; channel: string }
 
 async function updatePlugins(updates: PendingUpdate[]) {
+	const done: PendingUpdate[] = []
 	try {
 		const plans = []
-		for (const update of updates)
-			plans.push(await native('revenge.plugins.planInstall', wrapped ? [update.id, { skipMissingOptionals: true }] : [update.id, null, update.channel, null]))
+		for (const item of updates) plans.push(await native('revenge.plugins.planInstall', wrapped ? [item.id, { skipMissingOptionals: true }] : [item.id, null, item.channel, null]))
 
-		const lines = updates.map(update => `${update.name} ${update.installed} to ${update.available}`)
+		const lines = updates.map(item => `${item.name} ${item.installed} to ${item.available}`)
 		const warnings = plans.flatMap(warningMessages)
 		if (warnings.length) lines.push(warnings.join('\n'))
 		const title = updates.length === 1 ? 'Update plugin?' : `Update ${updates.length} plugins?`
 		if (!(await confirm(title, lines.join('\n'), 'Update'))) return false
 
-		for (const plan of plans) await native('revenge.plugins.install', [plan])
-		for (const update of updates) pendingReload.add(update.id)
+		for (const [index, plan] of plans.entries()) {
+			await native('revenge.plugins.install', [plan])
+			pendingReload.add(updates[index].id)
+			done.push(updates[index])
+		}
 		askReload('Updated. Reload to apply it.')
 		return true
 	} catch (e) {
-		showError(e)
+		if (done.length) askReload(`Updated ${done.length} of ${updates.length}. ${errorMessage(e)}\nReload to apply the ones that worked.`)
+		else showError(e)
 		return false
 	}
 }
 
 async function writeEnabled(id: string, on: boolean) {
 	const res = await native('revenge.plugins.setEnabled', [id, on, on])
-	// older builds answer with the problem instead of rejecting
 	if (res?.code)
 		throw Object.assign(new Error(res.problems?.map((p: any) => `${p.id} (${p.required})`).join(', ') ?? res.code), { code: res.code, details: { problems: res.problems } })
 }
@@ -834,31 +892,48 @@ function Browser() {
 
 	const syncState = () =>
 		readState()
-			.then(setState)
+			.then(next => {
+				for (const [id, change] of toggled) if ((next.enabled[id]?.enabled ?? false) !== change.before) toggled.delete(id)
+				setState(next)
+			})
 			.catch(() => {})
+
+	const afterToggle = (id: string, value: boolean) => {
+		toggled.set(id, { value, before: state?.enabled[id]?.enabled ?? false })
+		syncState()
+	}
 
 	const refreshAll = async () => {
 		if (refreshing) return
 		setRefreshing(true)
 		setEpoch(freshAvatarEpoch(true))
-		await checkUpdates(undefined, rerender)
-		await syncState()
-		await save({ ack: Date.now() })
-		setRefreshing(false)
+		try {
+			await checkUpdates(undefined, rerender)
+			await syncState()
+			await save({ ack: Date.now() })
+		} finally {
+			setRefreshing(false)
+		}
 	}
 
 	const refreshCurrent = async () => {
 		if (!current || reloadingRepo) return
 		setReloadingRepo(true)
-		await checkUpdates([current.url], rerender)
-		await syncState()
-		setReloadingRepo(false)
+		try {
+			await checkUpdates([current.url], rerender)
+			await syncState()
+		} finally {
+			setReloadingRepo(false)
+		}
 	}
 
 	const retry = async (repo: Repo) => {
 		setRetrying(repo.url)
-		await checkUpdates([repo.url], rerender)
-		setRetrying('')
+		try {
+			await checkUpdates([repo.url], rerender)
+		} finally {
+			setRetrying('')
+		}
 	}
 
 	const showRepo = (repo: Repo) => {
@@ -877,11 +952,13 @@ function Browser() {
 		let mounted = true
 		save({ ack: Date.now() })
 		syncState()
-		checkUpdates(undefined, () => mounted && rerender()).then(() => {
-			if (!mounted) return
-			save({ ack: Date.now() })
-			setBooting(false)
-		})
+		checkUpdates(undefined, () => mounted && rerender())
+			.catch(() => {})
+			.then(() => {
+				if (!mounted) return
+				save({ ack: Date.now() })
+				setBooting(false)
+			})
 		return () => {
 			mounted = false
 		}
@@ -909,7 +986,7 @@ function Browser() {
 		return () => subscription.remove()
 	}, [current, detail])
 
-	const isEnabled = (id: string) => toggled.get(id) ?? state?.enabled[id]?.enabled ?? false
+	const isEnabled = (id: string) => toggled.get(id)?.value ?? state?.enabled[id]?.enabled ?? false
 	const addedRepo = (url: string) => state?.repos.find(repo => !repo.internal && slash(repo.url) === slash(url))
 	const repoName = (repo: Repo) => listings.get(repo.url)?.name ?? repo.url
 	const alertMode = (url: string): AlertMode => data?.alerts?.[url] ?? 'news'
@@ -933,8 +1010,11 @@ function Browser() {
 		const list = ids.map(id => available.get(id)).filter((info): info is AvailableUpdate => !!info)
 		if (!list.length || updatingIds.length) return
 		setUpdatingIds(ids)
-		await updatePlugins(list.map(info => ({ id: info.id, name: pluginName(info.id), installed: info.installed, available: info.available, channel: info.channel })))
-		setUpdatingIds([])
+		try {
+			await updatePlugins(list.map(info => ({ id: info.id, name: pluginName(info.id), installed: info.installed, available: info.available, channel: info.channel })))
+		} finally {
+			setUpdatingIds([])
+		}
 	}
 
 	const updateFor = (repo: Repo, plugin: ListedPlugin): CardUpdate | undefined => {
@@ -986,12 +1066,7 @@ function Browser() {
 				h(FormSwitch, {
 					key: 'enabled',
 					value: on,
-					onValueChange: (value: boolean) =>
-						toggle(plugin.id, value).then(done => {
-							if (!done) return
-							toggled.set(plugin.id, value)
-							rerender()
-						}),
+					onValueChange: (value: boolean) => toggle(plugin.id, value).then(done => done && afterToggle(plugin.id, value)),
 				}),
 			]
 		}
@@ -1162,7 +1237,7 @@ function Browser() {
 			else if (listing?.at) lastUpdated = `${listing.stale ? 'Last updated' : 'Updated'} ${ago(listing.at)}`
 		}
 
-		const header = h(TableRowGroup, { key: 'info', title: listing?.name ?? repo.url, description: listing?.description }, [
+		const header = h(TableRowGroup, { key: 'info', title: listing?.name ?? repo.url, description: [hostOf(repo.url), listing?.description].filter(Boolean).join('\n') }, [
 			h(TableRow, { key: 'back', label: 'Back', icon: icon('ArrowLargeLeftIcon'), onPress: showList }),
 			h(TableRow, {
 				key: 'author',
@@ -1179,7 +1254,7 @@ function Browser() {
 						subLabel: entry.enabled ? 'Added to Revenge' : 'Turn on to install its plugins',
 						icon: icon(entry.enabled ? 'CircleCheckIcon' : 'CircleXIcon'),
 						value: entry.enabled,
-						onValueChange: (value: boolean) => putRepos(entry.url, value).then(syncState),
+						onValueChange: (value: boolean) => putRepos(entry.url, value).then(syncState).catch(showError),
 					})
 				: h(TableRow, {
 						key: 'repo',
@@ -1263,7 +1338,7 @@ function Browser() {
 			h(TableRow, {
 				key: 'repo',
 				label: 'Repository',
-				subLabel: repoName(repo),
+				subLabel: `${repoName(repo)}\n${hostOf(repo.url)}`,
 				icon: h(RepoAvatar, { repo, listing, epoch }),
 				arrow: true,
 				onPress: () => {
@@ -1298,12 +1373,7 @@ function Browser() {
 					label: on ? 'Enabled' : 'Disabled',
 					icon: icon('CircleCheckIcon'),
 					value: on,
-					onValueChange: (value: boolean) =>
-						toggle(id, value).then(done => {
-							if (!done) return
-							toggled.set(id, value)
-							rerender()
-						}),
+					onValueChange: (value: boolean) => toggle(id, value).then(done => done && afterToggle(id, value)),
 				}),
 			)
 			if (installed.settings)
@@ -1365,7 +1435,7 @@ function Browser() {
 		let subLabel = 'Loading...'
 		if (listing?.err) subLabel = friendlyError(listing.err)
 		else if (listing?.stale) subLabel = `Couldn't refresh, showing ${listing.saved ? `copy saved ${ago(listing.saved)}` : 'earlier data'}`
-		else if (listing) subLabel = listing.description || repo.url
+		else if (listing) subLabel = [listing.description, hostOf(repo.url)].filter(Boolean).join('\n')
 		if (newRepos[repo.url]) subLabel = `New repository\n${subLabel}`
 
 		let trailing
@@ -1378,7 +1448,7 @@ function Browser() {
 			label: repoName(repo),
 			subLabel,
 			labelLineClamp: 1,
-			subLabelLineClamp: newRepos[repo.url] ? 3 : 2,
+			subLabelLineClamp: newRepos[repo.url] ? 4 : 3,
 			trailing,
 			arrow: true,
 			onPress: () => {
@@ -1467,10 +1537,15 @@ export default plugin({
 	start({ cleanup, plugin, jsonStorage }) {
 		if (plugin.startedLate) plugin.requireReload()
 		store = jsonStorage
-		repairStore()
 
-		catalog = parseRepoList(jsonStorage.cache?.remote?.repos) ?? []
-		for (const [url, snap] of Object.entries<any>(jsonStorage.cache?.snaps ?? {})) if (catalog.some(repo => repo.url === url)) listings.set(url, { ...snap.data, saved: snap.at })
+		ready = whenLoaded().then(() => {
+			const data = readStore()
+			catalog = parseRepoList(data.remote?.repos) ?? []
+			for (const [url, snap] of Object.entries<any>(data.snaps)) {
+				if (catalog.some(repo => repo.url === url)) listings.set(url, { ...cleanListing(snap?.data, url), saved: snap?.at })
+			}
+			return update(() => ({}))
+		})
 
 		const settings = revenge.discord.modules.settings
 		const undo: (() => void)[] = []
