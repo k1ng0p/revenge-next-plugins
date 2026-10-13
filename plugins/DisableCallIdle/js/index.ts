@@ -1,9 +1,6 @@
-import { Logger } from '@revenge-mod/discord/common/logger'
 import { getModules } from '@revenge-mod/modules/finders'
 import { withProps } from '@revenge-mod/modules/finders/filters'
 import { instead } from '@revenge-mod/patcher'
-
-const DEBUG: boolean = false
 
 interface IdleTimer {
 	start(...args: unknown[]): unknown
@@ -18,20 +15,15 @@ interface CallIdleManager {
 
 export default plugin({
 	start({ cleanup, plugin }) {
-		const log = DEBUG ? new Logger('DisableCallIdle') : null
-		let restore: (() => void) | undefined
-
 		cleanup(
 			getModules(
 				withProps<CallIdleManager>('idleTimeout', 'handleVoiceStateUpdates'),
-				(manager, id) => {
+				manager => {
 					try {
 						const timer = manager.idleTimeout ?? manager.default?.idleTimeout
 
 						timer.stop()
-						restore = instead(timer, 'start', () => {})
-
-						if (DEBUG) log?.log(`idle timer disabled in module ${id}`)
+						cleanup(instead(timer, 'start', () => {}))
 					} catch (e) {
 						plugin.reportError(e)
 					}
@@ -39,8 +31,5 @@ export default plugin({
 				{ max: 1 },
 			),
 		)
-		cleanup(() => restore?.())
-
-		if (DEBUG) log?.log('started')
 	},
 })
