@@ -1,25 +1,46 @@
-const MAX_DEPTH = 3;
-const IDLE_MESSAGE = /by yourself in this call/i;
+import { Logger } from '@revenge-mod/discord/common/logger'
+import { getModules } from '@revenge-mod/modules/finders'
+import { withProps } from '@revenge-mod/modules/finders/filters'
+import { instead } from '@revenge-mod/patcher'
+
+const DEBUG: boolean = false
+
+interface IdleTimer {
+	start(...args: unknown[]): unknown
+	stop(): unknown
+}
+
+interface CallIdleManager {
+	idleTimeout: IdleTimer
+	handleVoiceStateUpdates: unknown
+	default?: { idleTimeout: IdleTimer }
+}
 
 export default plugin({
-	start({ cleanup }) {
-		const { onAnyFluxEventDispatched } = revenge.discord.flux;
-		const { Logger } = revenge.discord.common.logger;
-		const log = new Logger("DisableCallIdle");
+	start({ cleanup, plugin }) {
+		const log = DEBUG ? new Logger('DisableCallIdle') : null
+		let restore: (() => void) | undefined
 
 		cleanup(
-			onAnyFluxEventDispatched((p: any) => {
-				if (p?.type === "MESSAGE_CREATE" && IDLE_MESSAGE.test(String(p.message?.content ?? ""))) return;
-				if (p?.type !== "VOICE_CHANNEL_SELECT" || p.channelId) return p;
+			getModules(
+				withProps<CallIdleManager>('idleTimeout', 'handleVoiceStateUpdates'),
+				(manager, id) => {
+					try {
+						const timer = manager.idleTimeout ?? manager.default?.idleTimeout
 
-				const frames = (new Error().stack ?? "").split("\n").slice(1);
-				const at = frames.findIndex((f) => /\bat disconnect \(/.test(f));
-				const depth = at < 0 ? -1 : frames.length - at - 1;
-				const block = at >= 0 && depth <= MAX_DEPTH;
+						timer.stop()
+						restore = instead(timer, 'start', () => {})
 
-				log.log(`leave ${block ? "blocked" : "passed"} depth=${depth}`);
-				return block ? undefined : p;
-			}),
-		);
+						if (DEBUG) log?.log(`idle timer disabled in module ${id}`)
+					} catch (e) {
+						plugin.reportError(e)
+					}
+				},
+				{ max: 1 },
+			),
+		)
+		cleanup(() => restore?.())
+
+		if (DEBUG) log?.log('started')
 	},
-});
+})
