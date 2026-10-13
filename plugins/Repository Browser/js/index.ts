@@ -167,6 +167,49 @@ function githubAvatar(url: string | undefined, epoch: number) {
 	return match ? `https://github.com/${match[1] ?? match[2]}.png?size=96&v=${epoch}` : undefined
 }
 
+function parseAuthor(raw?: string) {
+	const author = (raw ?? '').trim()
+	const start = author.search(/[<(]/)
+	const name = (start === -1 ? author : author.slice(0, start)).trim() || author.slice(0, 60) || 'unknown'
+	const ids = (author.match(/<\d{17,20}>/g) ?? []).map(entry => entry.slice(1, -1))
+	return { name, ids }
+}
+
+let profileSheet: ((props: { userId: string }) => void) | undefined
+
+// opens the profile inside Discord, the same way Revenge does for plugin authors
+function openUserProfile(userId: string) {
+	try {
+		const { lookupModule, filters } = revenge.modules.finders
+		const { ordered, relative } = filters.withDependencies
+		const storeId = (name: string) => lookupModule(revenge.discord.flux.withStoreName(name))[1]
+		const named = filters.withName('showUserProfileActionSheet')
+		profileSheet ??= lookupModule(
+			named.and(
+				filters.withDependencies(
+					ordered([
+						revenge.discord.common.logger.LoggerModuleId,
+						storeId('UserStore'),
+						relative(1),
+						relative(2),
+						relative(3),
+						revenge.discord.common.importTracker.ImportTrackerModuleId,
+					]),
+				),
+			),
+		)[0]
+	} catch {
+		// the strict lookup is tied to this Discord version, try the plain one below
+	}
+	try {
+		profileSheet ??= revenge.modules.finders.lookupModule(revenge.modules.finders.filters.withName('showUserProfileActionSheet'))[0]
+	} catch {
+		profileSheet = undefined
+	}
+	if (profileSheet) profileSheet({ userId })
+	else revenge.react.ReactNative.Linking.openURL(`https://discord.com/users/${userId}`)
+}
+
 function knownUser(id: string) {
 	try {
 		return revenge.discord.flux.Stores.UserStore?.getUser?.(id)
@@ -298,7 +341,7 @@ function cleanListing(raw: any, fallbackName: string): Listing {
 			id,
 			name: text(item.name, 80) || id,
 			description: text(item.description, 400),
-			author: text(item.author, 80),
+			author: text(item.author, 200),
 			icon: shortLink(item.icon),
 			version: text(item.version, 40),
 			size: typeof item.size === 'number' && Number.isFinite(item.size) ? item.size : undefined,
@@ -796,7 +839,7 @@ function PluginCard(props: { plugin: ListedPlugin; version?: string; origin?: st
 				h(
 					View,
 					{ style: { paddingLeft: 32, marginTop: 6 } },
-					h(Text, { color: 'text-muted', variant: 'heading-md/medium' }, `by ${plugin.author ?? 'unknown'}${version ? ` \u2022 ${version}` : ''}`),
+					h(Text, { color: 'text-muted', variant: 'heading-md/medium' }, `by ${parseAuthor(plugin.author).name}${version ? ` \u2022 ${version}` : ''}`),
 					origin && h(Text, { color: 'text-muted', variant: 'text-sm/medium', style: { marginTop: 2 } }, origin),
 					h(Text, { variant: 'text-md/medium', style: { marginTop: 4 } }, plugin.description),
 					update &&
@@ -1026,7 +1069,7 @@ function Browser() {
 
 	const needle = query.trim().toLowerCase()
 	const matches = (...fields: any[]) => !needle || fields.some(field => typeof field === 'string' && field.toLowerCase().includes(needle))
-	const pluginMatches = (plugin: ListedPlugin) => matches(plugin.name, plugin.id, plugin.description, plugin.author)
+	const pluginMatches = (plugin: ListedPlugin) => matches(plugin.name, plugin.id, plugin.description, parseAuthor(plugin.author).name)
 
 	const pluginRank = (repo: Repo, plugin: ListedPlugin) => {
 		const meta = seen[repo.url]?.meta?.[plugin.id]
@@ -1245,7 +1288,7 @@ function Browser() {
 				subLabel: 'Author',
 				icon: h(RepoAvatar, { repo, listing, epoch, person: true }),
 				arrow: !!repo.discord,
-				onPress: repo.discord ? () => Linking.openURL(`https://discord.com/users/${repo.discord}`) : undefined,
+				onPress: repo.discord ? () => openUserProfile(repo.discord!) : undefined,
 			}),
 			entry
 				? h(TableSwitchRow, {
@@ -1334,7 +1377,13 @@ function Browser() {
 				label: 'Version',
 				subLabel: installed ? `Installed ${installed.version}${outdated ? `, ${info!.available} available` : ''}` : `Latest ${plugin.version ?? 'unknown'}`,
 			}),
-			h(TableRow, { key: 'author', label: 'Author', subLabel: plugin.author ?? 'unknown' }),
+			h(TableRow, {
+				key: 'author',
+				label: 'Author',
+				subLabel: parseAuthor(plugin.author).name,
+				arrow: parseAuthor(plugin.author).ids.length > 0,
+				onPress: parseAuthor(plugin.author).ids.length ? () => openUserProfile(parseAuthor(plugin.author).ids[0]) : undefined,
+			}),
 			h(TableRow, {
 				key: 'repo',
 				label: 'Repository',
