@@ -2,7 +2,7 @@ import { getModules } from '@revenge-mod/modules/finders'
 import { withProps } from '@revenge-mod/modules/finders/filters'
 import { after, instead } from '@revenge-mod/patcher'
 import { cloneElement, createElement, isValidElement } from 'react'
-import type { FC, ReactElement, ReactNode } from 'react'
+import type { FC, MemoExoticComponent, ReactElement, ReactNode } from 'react'
 
 interface Channel {
 	name?: string
@@ -12,7 +12,7 @@ interface RowProps {
 	channel?: Channel | null
 }
 
-type TextChannel = { type(props: RowProps): ReactNode }
+type TextChannel = MemoExoticComponent<FC<RowProps>>
 
 const renamed = new WeakMap<Channel, Channel>()
 const wrapped = new WeakMap<FC<any>, FC<any>>()
@@ -75,7 +75,7 @@ export default plugin({
 			return
 		}
 
-		let unpatchRow: (() => unknown) | undefined
+		let rowPatched = false
 
 		cleanup(
 			// modules/channel_list_v2/native/renderRedesignChannelListItem.tsx
@@ -84,28 +84,21 @@ export default plugin({
 					'renderChannelListItem',
 				),
 				ChannelListItem => {
-					const unpatchItem = after(ChannelListItem, 'renderChannelListItem', tree => {
-						try {
-							const row = unpatchRow ? undefined : findRow(tree)
-							if (row)
-								unpatchRow = instead(
-									row.type as unknown as TextChannel,
-									'type',
-									function (args, orig) {
-										const [props, ...rest] = args
-										const channel = props.channel && dashless(props.channel)
-										return Reflect.apply(orig, this, [{ ...props, channel }, ...rest])
-									},
+					cleanup(
+						after(ChannelListItem, 'renderChannelListItem', tree => {
+							const row = rowPatched ? undefined : findRow(tree)
+							if (row) {
+								rowPatched = true
+								cleanup(
+									instead(row.type as TextChannel, 'type', ([props], orig) =>
+										orig({ ...props, channel: props.channel && dashless(props.channel) }),
+									),
 								)
+							}
 
 							return swapThreads(tree)
-						} catch (e) {
-							plugin.reportError(String(e))
-							return tree
-						}
-					})
-
-					cleanup(unpatchItem, () => unpatchRow?.())
+						}),
+					)
 				},
 			),
 		)
