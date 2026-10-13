@@ -4,8 +4,8 @@
 	"name": "Disable Call Idle",
 	"description": "Prevents automatic disconnects from idle DM calls.",
 	"author": "k1ng_op",
-	"icon": "disconnect",
-	"version": "1.0.8",
+	"icon": "PhoneCallIcon",
+	"version": "1.1.0",
 	"dependencies": {
 		"revenge.api": {
 			"version": ">=1 <2"
