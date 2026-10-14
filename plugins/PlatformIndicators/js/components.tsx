@@ -1,4 +1,3 @@
-import { onFluxEventDispatched, Stores } from '@revenge-mod/discord/flux'
 import { useReRender } from '@revenge-mod/utils/react'
 import { useEffect } from 'react'
 import { Image, StyleSheet, View } from 'react-native'
@@ -19,14 +18,10 @@ import {
 	statusColor,
 	surfaceColor,
 } from './platforms'
+import { statusSignature, subscribe } from './presence'
 import { getSettings } from './shared'
 import type { ReactElement } from 'react'
 import type { StyleProp, ViewStyle } from 'react-native'
-
-interface Store {
-	addChangeListener?(listener: () => void): void
-	removeChangeListener(listener: () => void): void
-}
 
 interface PlatformIconProps {
 	platform: string
@@ -80,41 +75,14 @@ function useStatusRerender(userId: string) {
 	const rerender = useReRender()
 
 	useEffect(() => {
-		let mounted = true
-		let last = JSON.stringify(getStatuses(userId) ?? {})
+		let last = statusSignature(getStatuses(userId))
 
-		const refresh = () => {
-			if (!mounted) return
-			const next = JSON.stringify(getStatuses(userId) ?? {})
+		return subscribe(() => {
+			const next = statusSignature(getStatuses(userId))
 			if (next === last) return
 			last = next
 			rerender()
-		}
-		const later = () => setTimeout(refresh, 0)
-
-		const { PresenceStore, SessionsStore, SelfPresenceStore } =
-			Stores as Record<string, Store | undefined>
-		const stores = [PresenceStore, SessionsStore, SelfPresenceStore].filter(
-			(store): store is Store => typeof store?.addChangeListener === 'function',
-		)
-		for (const store of stores) store.addChangeListener?.(refresh)
-
-		const offEvents = [
-			'PRESENCE_UPDATES',
-			'PRESENCES_REPLACE',
-			'SESSIONS_REPLACE',
-		].map(name =>
-			onFluxEventDispatched(name, payload => {
-				later()
-				return payload
-			}),
-		)
-
-		return () => {
-			mounted = false
-			for (const store of stores) store.removeChangeListener(refresh)
-			for (const off of offEvents) off()
-		}
+		})
 	}, [rerender, userId])
 }
 
