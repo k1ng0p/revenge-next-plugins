@@ -11,11 +11,13 @@ import { View } from 'react-native'
 import { StatusDot, StatusIcons, StatusIconsRow } from './components'
 import {
 	dotAllowedForContext,
+	findAsset,
 	getStatuses,
 	inlineIconsAllowed,
 	pickDotPlatform,
 	resolveContext,
 } from './platforms'
+import { stopPresence } from './presence'
 import SettingsComponent from './settings'
 import { bindApi, DefaultSettings, getSettings, reportError } from './shared'
 import type {
@@ -108,6 +110,7 @@ export default plugin<{ jsonStorage: Settings }>({
 	start({ cleanup, jsonStorage, plugin }) {
 		bindApi(jsonStorage, plugin)
 		cleanup(() => bindApi(undefined, undefined))
+		cleanup(stopPresence)
 
 		if (plugin.startedLate) plugin.requireReload()
 
@@ -380,9 +383,11 @@ export default plugin<{ jsonStorage: Settings }>({
 
 							const statusElement = kids[index]
 							const statuses = getStatuses(userId) ?? {}
+							const platform = pickDotPlatform(statuses)
 							const hasIcon =
 								dotAllowedForContext(resolveContext(props?.size)) &&
-								!!pickDotPlatform(statuses)
+								!!platform &&
+								!!findAsset(platform, true)
 							const children = kids.map((kid, i) => {
 								if (i === index)
 									return createElement(StatusDot, {
