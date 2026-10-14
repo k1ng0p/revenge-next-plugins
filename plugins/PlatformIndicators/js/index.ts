@@ -94,6 +94,12 @@ function safely(fn: () => void) {
 	}
 }
 
+const nodeName = (node: any): string | undefined =>
+	node?.type?.displayName ??
+	node?.type?.name ??
+	node?.type?.type?.name ??
+	node?.type?.render?.name
+
 const hasUser = (node: any) => node?.props?.user?.id !== undefined
 
 const isStatusElement = (node: any) =>
@@ -175,6 +181,25 @@ export default plugin<{ jsonStorage: Settings }>({
 			}),
 		)
 
+		const patchProfileName = (tree: any) => {
+			const name = findNode(tree, node => node?.type?.name === 'DisplayName')
+			if (!name) return false
+
+			cleanup(
+				after(name, 'type', (displayName: any) => {
+					safely(() => {
+						const userId = name.props?.user?.id
+						if (userId && inlineIconsAllowed('profileUsername'))
+							displayName?.props?.children?.push(
+								createElement(StatusIcons, { key: 'UserProfileIcons', userId }),
+							)
+					})
+					return displayName
+				}),
+			)
+			return true
+		}
+
 		cleanup(
 			getModules(withExactName('UserProfileContent'), mod => {
 				const target = patchTarget(mod)
@@ -192,36 +217,23 @@ export default plugin<{ jsonStorage: Settings }>({
 							cleanup(
 								after(primary, 'type', (info: any) => {
 									safely(() => {
-										if (info?.type?.name !== 'UserProfilePrimaryInfo') return
+										if (patchProfileName(info)) return
+
+										const primaryInfo = findNode(
+											info,
+											node => nodeName(node) === 'UserProfilePrimaryInfo',
+										)
+										const holder =
+											typeof primaryInfo?.type === 'function'
+												? primaryInfo
+												: typeof primaryInfo?.type?.type === 'function'
+													? primaryInfo.type
+													: undefined
+										if (!holder) return
 
 										cleanup(
-											after(info, 'type', (content: any) => {
-												safely(() => {
-													const name = findNode(
-														content,
-														node => node?.type?.name === 'DisplayName',
-													)
-													if (!name) return
-
-													cleanup(
-														after(name, 'type', (displayName: any) => {
-															safely(() => {
-																const userId = name.props?.user?.id
-																if (
-																	userId &&
-																	inlineIconsAllowed('profileUsername')
-																)
-																	displayName?.props?.children?.push(
-																		createElement(StatusIcons, {
-																			key: 'UserProfileIcons',
-																			userId,
-																		}),
-																	)
-															})
-															return displayName
-														}),
-													)
-												})
+											after(holder, 'type', (content: any) => {
+												safely(() => patchProfileName(content))
 												return content
 											}),
 										)
