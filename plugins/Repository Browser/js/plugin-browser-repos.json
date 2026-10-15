@@ -11,20 +11,16 @@
       "discord": "119043674385547264"
     },
     {
-      "url": "https://next.jarviscli.dev/",
-      "source": "https://next.jarviscli.dev/",
-      "discord": "1356936317501571214"
+      "url": "https://accentaro.github.io/revenge-plugins/",
+      "source": "https://github.com/Accentaro/revenge-plugins",
+      "discord": "463702169443368970"
     },
     {
       "url": "https://rn.alphexo.dev/",
       "source": "https://github.com/secp192k1/revenge-next-plugins",
       "discord": "477497542205243392"
     },
-    {
-      "url": "https://contrabag.github.io/revenge-next-plugins/",
-      "source": "https://github.com/contrabag/revenge-next-plugins",
-      "discord": "780075200950566933"
-    },
+    
     {
       "url": "https://rvp.palmdevs.me",
       "source": "https://github.com/PalmDevs/revenge-next-plugins",
@@ -46,9 +42,19 @@
       "discord": "1278723517436788897"
     },
     {
+      "url": "https://next.jarviscli.dev/",
+      "source": "https://next.jarviscli.dev/",
+      "discord": "1356936317501571214"
+    },
+    {
       "url": "https://mxtiy.knifecodez.workers.dev/",
       "source": "https://github.com/NoReplyUI5/revenge-next-plugins",
       "discord": "1053918356375351386"
+    },
+    {
+      "url": "https://contrabag.github.io/revenge-next-plugins/",
+      "source": "https://github.com/contrabag/revenge-next-plugins",
+      "discord": "780075200950566933"
     }
   ]
 }
