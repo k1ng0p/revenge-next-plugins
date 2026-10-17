@@ -4,8 +4,8 @@
 	"name": "LastOnlineTracker",
 	"description": "Shows 'Active X ago' under usernames in the member list, DM list, and DM header once they go offline",
 	"icon": "HourglassIcon",
-	"author": "k1ng_op",
-	"version": "2.4.4",
+	"author": "k1ng_op <641266820187160576> (https://github.com/k1ng0p \"GitHub\")",
+	"version": "2.5.0",
 	"dependencies": {
 		"revenge.api": { "version": ">=1 <2" },
 		"discord": { "version": "*" }
