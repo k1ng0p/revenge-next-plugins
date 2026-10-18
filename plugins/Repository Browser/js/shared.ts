@@ -6,7 +6,7 @@ import { React, ReactNative } from '@revenge-mod/react'
 
 export type AlertMode = 'all' | 'news' | 'updates' | 'off'
 
-export type Repo = { url: string; source?: string; discord?: string }
+export type Repo = { url: string; source?: string; discord?: string; badges?: string[] }
 
 export type ListedPlugin = {
 	id: string
@@ -143,7 +143,7 @@ export function modal(title: string, content: string, actions: (button: any) => 
 
 export const inform = (title: string, text: string) => modal(title, text, Button => [h(Button, { key: 'ok', text: 'OK', variant: 'secondary' })])
 
-export const showError = (e: unknown) => inform('Plugin Browser', errorMessage(e))
+export const showError = (e: unknown) => inform('Plugin Browser', errorMessage(e).split('\n')[0])
 
 export function fail(e: unknown) {
 	reportError(e)
