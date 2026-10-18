@@ -372,6 +372,13 @@ export function parseRepoList(json: any): Repo[] | null {
 		const repo: Repo = { url: slash(url) }
 		if (typeof item.source === 'string' && /^https:\/\//.test(item.source.trim())) repo.source = item.source.trim()
 		if (typeof item.discord === 'string' && /^\d{15,25}$/.test(item.discord.trim())) repo.discord = item.discord.trim()
+
+		const badges = (Array.isArray(item.badges) ? item.badges : [])
+			.filter((badge: unknown): badge is string => typeof badge === 'string')
+			.map((badge: string) => badge.trim().slice(0, 16))
+			.filter(Boolean)
+			.slice(0, 3)
+		if (badges.length) repo.badges = badges
 		repos.push(repo)
 	}
 	return repos.length ? repos : null
@@ -516,4 +523,17 @@ export function restore() {
 		}
 		return update(() => ({}))
 	})
+}
+
+// requirements are listed as "id 1.2.0" or "id 1.2.0 (optional)"
+export function dependentsOf(id: string, installed: Map<string, unknown>) {
+	const names = new Set<string>()
+	for (const listing of listings.values()) {
+		for (const plugin of listing.plugins) {
+			if (plugin.id === id || !installed.has(plugin.id)) continue
+			const need = plugin.requires?.find(entry => entry.split(' ')[0] === id)
+			if (need) names.add(need.endsWith('(optional)') ? `${plugin.name} (optional)` : plugin.name)
+		}
+	}
+	return [...names]
 }
