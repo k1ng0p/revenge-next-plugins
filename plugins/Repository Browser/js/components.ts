@@ -163,3 +163,33 @@ export function RepoCount() {
 		h(Text, { variant: 'text-md/medium', color: 'text-muted' }, String(catalog.length)),
 	)
 }
+
+const BADGE_COLORS: Record<string, string> = {
+	official: '#5865F2',
+	developer: '#5865F2',
+	verified: '#248046',
+	trusted: '#248046',
+	reviewed: '#248046',
+	popular: '#8E44AD',
+	new: '#EB459E',
+	beta: '#C77D0A',
+	unmaintained: '#C77D0A',
+	caution: '#DA373C',
+	deprecated: '#DA373C',
+}
+
+export function RepoBadges({ badges }: { badges: string[] }) {
+	const { View } = ReactNative
+	const { Text } = Design
+	return h(
+		View,
+		{ style: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end' } },
+		...badges.map(label =>
+			h(
+				View,
+				{ key: label, style: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, marginLeft: 4, marginBottom: 4, backgroundColor: BADGE_COLORS[label.toLowerCase()] ?? '#4E5058' } },
+				h(Text, { variant: 'text-xs/bold', style: { color: '#FFFFFF' } }, label),
+			),
+		),
+	)
+}
