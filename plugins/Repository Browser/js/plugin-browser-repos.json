@@ -4,62 +4,72 @@
       "url": "https://k1ng0p.github.io/revenge-next-plugins/",
       "source": "https://github.com/k1ng0p/revenge-next-plugins",
       "discord": "641266820187160576"
+      "badges": ["Developer", "Verified", "Maintainer"]
     },
     {
       "url": "https://bleelblep.github.io/revenge-next-plugins/",
       "source": "https://github.com/bleelblep/revenge-next-plugins",
       "discord": "119043674385547264"
+      "badges": ["Trusted", "Popular", "Utility"]
     },
     {
       "url": "https://accentaro.github.io/revenge-plugins/",
       "source": "https://github.com/Accentaro/revenge-plugins",
       "discord": "463702169443368970"
+      "badges": ["Trusted", "Developer", "Utility"]
     },
     {
       "url": "https://rn.alphexo.dev/",
       "source": "https://github.com/secp192k1/revenge-next-plugins",
       "discord": "477497542205243392"
     },
-    
     {
       "url": "https://rvp.palmdevs.me",
       "source": "https://github.com/PalmDevs/revenge-next-plugins",
       "discord": "629368283354628116"
+      "badges": ["Official", "Developer", "Trusted"]
     },
     {
       "url": "https://otkusteyler.github.io/Revenge-Next-Plugins/",
       "source": "https://github.com/OTKUSteyler/Revenge-Next-Plugins",
       "discord": "554071670143451176"
+      "badges": ["Ports"]
     },
     {
       "url": "https://plugins.obamabot.me/revenge-plugins",
       "source": "https://github.com/WolfPlugs/revenge-plugins",
       "discord": "347096063569559553"
-    },
-    {
-      "url": "https://rn.kmmiio99o.dev/",
-      "source": "https://git.gay/kmmiio99o/revenge-next-plugins",
-      "discord": "879393496627306587"
-    },
-    {
-      "url": "https://next.tralwdwd.dev/",
-      "source": "https://github.com/tralwdwd/revenge-next-plugins",
-      "discord": "1278723517436788897"
-    },
-    {
-      "url": "https://next.jarviscli.dev/",
-      "source": "https://next.jarviscli.dev/",
-      "discord": "1356936317501571214"
+      "badges": ["Trusted", "Developer", "Utility"]
     },
     {
       "url": "https://mxtiy.knifecodez.workers.dev/",
       "source": "https://github.com/NoReplyUI5/revenge-next-plugins",
       "discord": "1053918356375351386"
+      "badges": ["Trusted", "Ports", "Utility"]
+    },
+    {
+      "url": "https://rn.kmmiio99o.dev/",
+      "source": "https://git.gay/kmmiio99o/revenge-next-plugins",
+      "discord": "879393496627306587"
+      "badges": ["Trusted", "Popular", "Utility"]
+    },
+    {
+      "url": "https://next.tralwdwd.dev/",
+      "source": "https://github.com/tralwdwd/revenge-next-plugins",
+      "discord": "1278723517436788897"
+      "badges": ["Trusted", "Developer", "Utility"]
+    },
+    {
+      "url": "https://next.jarviscli.dev/",
+      "source": "https://next.jarviscli.dev/",
+      "discord": "1356936317501571214"
+      "badges": ["Beta", "Themes", "Caution"]
     },
     {
       "url": "https://contrabag.github.io/revenge-next-plugins/",
       "source": "https://github.com/contrabag/revenge-next-plugins",
       "discord": "780075200950566933"
+      "badges": ["Trusted", "Ports", "Utility"]
     }
   ]
 }
