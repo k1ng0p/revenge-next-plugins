@@ -1,11 +1,12 @@
 import { FormSwitch, SearchInput } from '@revenge-mod/components'
 import { Design } from '@revenge-mod/discord/design'
 import { React, ReactNative } from '@revenge-mod/react'
-import { FeedSection, Notice, PluginCard, RepoAvatar } from './components'
+import { FeedSection, Notice, PluginCard, RepoAvatar, RepoBadges } from './components'
 import type { CardUpdate } from './components'
 import {
 	catalog,
 	checkUpdates,
+	dependentsOf,
 	discordUser,
 	dismiss,
 	dismissAll,
@@ -223,6 +224,11 @@ function useBrowser() {
 		syncState()
 	}
 
+	const removePlugin = (plugin: ListedPlugin) =>
+		uninstall(plugin, state ? dependentsOf(plugin.id, state.installed) : []).then(done => {
+			if (done) syncState()
+		})
+
 	const pluginActions = (repo: Repo, plugin: ListedPlugin, fromSearch: boolean) => {
 		if (!state) return []
 		const installed = state.installed.get(plugin.id)
@@ -237,10 +243,7 @@ function useBrowser() {
 					size: 'sm',
 					variant: 'secondary',
 					icon: asset('TrashIcon'),
-					onPress: () =>
-						uninstall(plugin).then(done => {
-							if (done) syncState()
-						}),
+					onPress: () => removePlugin(plugin),
 				}),
 				installed.settings &&
 					h(IconButton, { key: 'settings', size: 'sm', variant: 'secondary', icon: asset('SettingsIcon'), disabled: !settingsReady, onPress: () => openPluginSettings(plugin.id) }),
@@ -379,6 +382,7 @@ function useBrowser() {
 		repoRank,
 		sortPlugins,
 		installPlugin,
+		removePlugin,
 		pluginCard,
 		moreButton,
 		controls,
@@ -455,6 +459,7 @@ function updatesSection(b: Ctx) {
 }
 
 function repoRow(b: Ctx, repo: Repo) {
+	const { View } = ReactNative
 	const { Button, TableRow } = Design
 	const listing = listings.get(repo.url)
 	const failed = listing?.err || listing?.stale
@@ -468,6 +473,7 @@ function repoRow(b: Ctx, repo: Repo) {
 	let trailing
 	if (failed) trailing = h(Button, { text: 'Retry', size: 'sm', variant: 'secondary', loading: b.retrying === repo.url, onPress: () => b.retry(repo) })
 	else if (listing) trailing = h(TableRow.TrailingText, { text: `Plugins \u00b7 ${listing.plugins.length}` })
+	if (repo.badges?.length) trailing = h(View, { style: { alignItems: 'flex-end' } }, h(RepoBadges, { badges: repo.badges }), trailing)
 
 	return h(TableRow, {
 		key: repo.url,
@@ -712,10 +718,7 @@ function PluginPage(b: Ctx, repo: Repo, id: string) {
 				label: 'Uninstall',
 				variant: 'danger',
 				icon: icon('TrashIcon'),
-				onPress: () =>
-					uninstall(plugin).then(done => {
-						if (done) b.syncState()
-					}),
+				onPress: () => b.removePlugin(plugin),
 			}),
 		)
 	} else if (entry?.enabled) {
