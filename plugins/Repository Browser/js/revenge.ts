@@ -100,8 +100,9 @@ export function openPluginSettings(id: string) {
 	if (nav.isReady()) (nav as any).navigate(id)
 }
 
-export async function uninstall(plugin: ListedPlugin) {
-	if (!(await confirm('Uninstall plugin?', `${plugin.name} and all of its data will be removed. This cannot be undone.`, 'Uninstall', 'destructive'))) return false
+export async function uninstall(plugin: ListedPlugin, dependents: string[] = []) {
+	const warning = dependents.length ? `\n\nRequired by: ${dependents.join(', ')}. Removing it may break them.` : ''
+	if (!(await confirm('Uninstall plugin?', `${plugin.name} and all of its data will be removed. This cannot be undone.${warning}`, 'Uninstall', 'destructive'))) return false
 	try {
 		await native('revenge.plugins.setEnabled', [plugin.id, false, false]).catch(() => {})
 		await native('revenge.plugins.uninstall', [plugin.id])
