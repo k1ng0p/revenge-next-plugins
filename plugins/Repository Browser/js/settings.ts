@@ -460,7 +460,7 @@ function updatesSection(b: Ctx) {
 
 function repoRow(b: Ctx, repo: Repo) {
 	const { View } = ReactNative
-	const { Button, TableRow } = Design
+	const { Button, TableRow, Text } = Design
 	const listing = listings.get(repo.url)
 	const failed = listing?.err || listing?.stale
 
@@ -473,15 +473,24 @@ function repoRow(b: Ctx, repo: Repo) {
 	let trailing
 	if (failed) trailing = h(Button, { text: 'Retry', size: 'sm', variant: 'secondary', loading: b.retrying === repo.url, onPress: () => b.retry(repo) })
 	else if (listing) trailing = h(TableRow.TrailingText, { text: `Plugins \u00b7 ${listing.plugins.length}` })
-	if (repo.badges?.length) trailing = h(View, { style: { alignItems: 'flex-end' } }, h(RepoBadges, { badges: repo.badges }), trailing)
+
+	const lines = b.newRepos[repo.url] ? 4 : 3
+	const details = repo.badges?.length
+		? h(
+				View,
+				null,
+				h(Text, { variant: 'text-sm/medium', color: 'text-muted', numberOfLines: lines }, subLabel),
+				h(View, { style: { marginTop: 6 } }, h(RepoBadges, { badges: repo.badges })),
+			)
+		: subLabel
 
 	return h(TableRow, {
 		key: repo.url,
 		icon: h(RepoAvatar, { repo, listing, epoch: b.epoch }),
 		label: b.repoName(repo),
-		subLabel,
+		subLabel: details,
 		labelLineClamp: 1,
-		subLabelLineClamp: b.newRepos[repo.url] ? 4 : 3,
+		subLabelLineClamp: lines,
 		trailing,
 		arrow: true,
 		onPress: () => {
@@ -497,7 +506,7 @@ function emptyList(b: Ctx) {
 	return h(
 		Stack,
 		{ key: 'empty', spacing: 12 },
-		h(Text, { variant: 'text-md/medium', color: 'text-muted' }, waiting ? 'Loading repositories...' : "Couldn't load the repository list. Check your connection and try again."),
+		h(Text, { variant: 'text-md/medium', color: 'text-muted' }, waiting ? 'Loading repositories...' : "Couldn't load the repository list. Check your connection and try again. If it keeps failing, the list itself may be broken."),
 		!waiting && h(Button, { text: 'Try again', size: 'md', variant: 'secondary', onPress: b.refreshAll }),
 	)
 }
