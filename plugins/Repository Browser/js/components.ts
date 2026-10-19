@@ -183,12 +183,12 @@ export function RepoBadges({ badges }: { badges: string[] }) {
 	const { Text } = Design
 	return h(
 		View,
-		{ style: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end' } },
+		{ style: { flexDirection: 'row', flexWrap: 'wrap' } },
 		...badges.map(label =>
 			h(
 				View,
-				{ key: label, style: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, marginLeft: 4, marginBottom: 4, backgroundColor: BADGE_COLORS[label.toLowerCase()] ?? '#4E5058' } },
-				h(Text, { variant: 'text-xs/bold', style: { color: '#FFFFFF' } }, label),
+				{ key: label, style: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 8, marginRight: 4, marginBottom: 2, backgroundColor: BADGE_COLORS[label.toLowerCase()] ?? '#4E5058' } },
+				h(Text, { variant: 'text-xs/semibold', style: { color: '#FFFFFF' } }, label),
 			),
 		),
 	)
