@@ -1,4 +1,4 @@
-import { getAssetIdByName } from '@revenge-mod/assets'
+import { AssetsRegistry } from '@revenge-mod/assets'
 import { ActionSheetActionCreators } from '@revenge-mod/discord/actions'
 import { Design } from '@revenge-mod/discord/design'
 import { SettingListRenderer } from '@revenge-mod/discord/modules/settings/renderer'
@@ -6,7 +6,7 @@ import { getModuleWithImportedPath } from '@revenge-mod/discord/utils/modules/fi
 import { getModules } from '@revenge-mod/modules/finders'
 import { withName, withProps } from '@revenge-mod/modules/finders/filters'
 import { before, instead } from '@revenge-mod/patcher'
-import { ReactJSXRuntime } from '@revenge-mod/react'
+import { React, ReactJSXRuntime } from '@revenge-mod/react'
 import { insteadJSX } from '@revenge-mod/react/jsx-runtime'
 import { isOn, ui } from './options'
 import type { PluginCleanupApi } from '@revenge-mod/plugins/types'
@@ -324,7 +324,7 @@ const NITRO_SETTING_KEYS = new Set([
 	'QUEST_PREVIEW_TOOL',
 ])
 
-/** Tested against a setting key or section label, upper-cased with `_` separators */
+/** Tested against a setting key; keys are the same in every language */
 const SETTING_PATTERNS: Array<[OptionKey, RegExp]> = [
 	['setFamily', /FAMILY/],
 	['setClips', /^CLIPS?$/],
@@ -366,7 +366,6 @@ function pruneTree(props: SettingsTreeProps): SettingsTreeProps {
 			...props.node,
 			// A section left without rows goes away together with its header
 			sections: sections
-				.filter(s => !settingIsHidden(s.label ?? s.title))
 				.map(s => ({
 					...s,
 					settings: s.settings?.filter(k => !settingIsHidden(k)),
@@ -406,101 +405,13 @@ function settingsPage(env: Env) {
 }
 
 // ---------------------------------------------------------------------------
-// Rows and groups matched by their visible English label
+// Which sheet is open
 // ---------------------------------------------------------------------------
-
-interface LabelRule {
-	option: OptionKey
-	/** `message` only applies while the message long-press sheet is open */
-	where: 'message' | 'anywhere'
-	rows?: readonly string[]
-	groups?: readonly string[]
-}
-
-const LABEL_RULES: readonly LabelRule[] = [
-	{ option: 'msgForward', where: 'message', rows: ['Forward'] },
-	{ option: 'msgThread', where: 'message', rows: ['Create Thread'] },
-	{ option: 'msgMarkUnread', where: 'message', rows: ['Mark Unread'] },
-	{ option: 'msgApps', where: 'message', rows: ['Apps'] },
-	{ option: 'msgBookmark', where: 'message', rows: ['Bookmark Message'] },
-	{ option: 'msgReminder', where: 'message', rows: ['Create Reminder'] },
-	{ option: 'msgDm', where: 'message', rows: ['Message'] },
-	{ option: 'msgMention', where: 'message', rows: ['Mention'] },
-	{
-		option: 'setWhatsNew',
-		where: 'anywhere',
-		rows: ["What's New"],
-		groups: ["What's New"],
-	},
-	{
-		option: 'voiceAddPeople',
-		where: 'anywhere',
-		rows: ['Add people to Voice Chat', 'Let the group know you are here!'],
-	},
-	{
-		option: 'voiceConsole',
-		where: 'anywhere',
-		rows: ['Transfer to Xbox', 'Transfer to PlayStation'],
-		groups: ['Transfer to Console'],
-	},
-]
-
-const normalizeLabel = (text: string) =>
-	text
-		.replace(/[\u2018\u2019]/g, "'")
-		.trim()
-		.toLowerCase()
-
-function indexBy(field: 'rows' | 'groups') {
-	const index = new Map<string, LabelRule>()
-	for (const rule of LABEL_RULES)
-		for (const label of rule[field] ?? [])
-			index.set(normalizeLabel(label), rule)
-	return index
-}
-
-const ROW_LABELS = indexBy('rows')
-const GROUP_LABELS = indexBy('groups')
-
-function ruleApplies(rule: LabelRule): boolean {
-	if (ui.settingsOpen || !isOn(rule.option)) return false
-	return rule.where === 'anywhere' || ui.messageSheetOpen
-}
-
-/** A prop's visible text: a plain string, or an element wrapping one */
-function textOfProp(value: unknown): string | undefined {
-	if (typeof value === 'string') return value
-	const children = (value as { props?: { children?: unknown } } | null)?.props
-		?.children
-	return typeof children === 'string' ? children : undefined
-}
-
-const patchedTargets = new WeakSet<object>()
-
-function muteByLabel(
-	env: Env,
-	target: unknown,
-	index: Map<string, LabelRule>,
-	propNames: readonly string[],
-) {
-	if (!target || patchedTargets.has(target as object)) return
-	patchedTargets.add(target as object)
-	env.cleanup(
-		insteadJSX(target as any, (args, jsx) => {
-			const props = args[1] as Record<string, unknown> | undefined
-			for (const name of propNames) {
-				const text = textOfProp(props?.[name])
-				const rule = text ? index.get(normalizeLabel(text)) : undefined
-				if (rule && ruleApplies(rule)) return null
-			}
-			return jsx(args[0], args[1], args[2])
-		}),
-	)
-}
 
 const MESSAGE_SHEET_KEY = /^MessageLongPress/
 
-function labelledRows(env: Env) {
+/** Message menu rows only exist inside the long-press sheet, so track when it is open */
+function trackMessageSheet(env: Env) {
 	env.cleanup(
 		before(ActionSheetActionCreators, 'openLazy', args => {
 			ui.messageSheetOpen = MESSAGE_SHEET_KEY.test(String(args[1]))
@@ -515,64 +426,157 @@ function labelledRows(env: Env) {
 			return []
 		}),
 	)
-
-	const ROW_PROPS = ['label', 'title', 'subLabel'] as const
-	const GROUP_PROPS = ['title', 'label'] as const
-
-	for (const row of [Design.ActionSheetRow, Design.TableRow])
-		muteByLabel(env, row, ROW_LABELS, ROW_PROPS)
-	muteByLabel(env, Design.TableRowGroup, GROUP_LABELS, GROUP_PROPS)
-
-	// Screens that import the component directly may hold a different reference
-	whenNamed(env, 'TableRow', ns =>
-		muteByLabel(env, componentOf(ns), ROW_LABELS, ROW_PROPS),
-	)
-	whenNamed(env, 'ActionSheetRow', ns =>
-		muteByLabel(env, componentOf(ns), ROW_LABELS, ROW_PROPS),
-	)
-	whenNamed(env, 'TableRowGroup', ns =>
-		muteByLabel(env, componentOf(ns), GROUP_LABELS, GROUP_PROPS),
-	)
 }
 
 // ---------------------------------------------------------------------------
-// Voice call banner
+// Matched by component name or icon, so they work in every language
 // ---------------------------------------------------------------------------
 
-const BANNER_TEXTS = new Set([
-	'add people to voice chat',
-	'let the group know you are here!',
-])
-const BANNER_PROPS = [
-	'label',
-	'title',
-	'subLabel',
-	'header',
-	'text',
-	'children',
-]
+/** The name React shows for a component type, memo and forwardRef included */
+function nameOfType(type: any): string {
+	return (
+		type?.displayName ??
+		type?.name ??
+		type?.type?.displayName ??
+		type?.type?.name ??
+		type?.render?.displayName ??
+		type?.render?.name ??
+		''
+	)
+}
 
-/**
- * The call screen builds this banner from a component that is not one of the
- * design-system rows, so it is caught where its text is handed over in props.
- */
-function voiceBanner(env: Env) {
-	const isBanner = (props: unknown) => {
-		if (!props || typeof props !== 'object') return false
-		for (const name of BANNER_PROPS) {
-			const text = textOfProp((props as Record<string, unknown>)[name])
-			if (text && BANNER_TEXTS.has(normalizeLabel(text))) return true
+/** Name of the icon component a design-system row was given, e.g. `ClockIcon` */
+function iconComponentName(props: any): string | undefined {
+	const icon = props?.icon?.props?.IconComponent
+	return typeof icon === 'function' ? icon.displayName || icon.name : undefined
+}
+
+/** Whole components that exist only to draw one thing */
+const COMPONENT_RULES = new Map<string, OptionKey>([
+	// The "Add people to Voice Chat" banner on the call screen
+	['VoicePanelFloatingCTAContainer', 'voiceAddPeople'],
+	// The Xbox and PlayStation rows in the call options
+	['GameConsoleAccountButton', 'voiceConsole'],
+])
+
+const CONSOLE_BUTTON = 'GameConsoleAccountButton'
+
+/** Components that only count as junk inside the message long-press sheet */
+const SHEET_COMPONENT_RULES = new Map<string, OptionKey>([
+	// The emoji reaction bar at the top of the menu
+	['EmojiRow', 'msgReactions'],
+])
+
+function componentRules(env: Env) {
+	const holdsConsoleButton = (children: unknown) =>
+		React.Children.toArray(children as any).some(
+			child =>
+				nameOfType((child as { type?: unknown })?.type) === CONSOLE_BUTTON,
+		)
+
+	for (const factory of ['jsx', 'jsxs'] as const)
+		env.cleanup(
+			instead(ReactJSXRuntime as any, factory, (args: any[], original: any) => {
+				if (!ui.settingsOpen) {
+					const name = nameOfType(args[0])
+					const option = COMPONENT_RULES.get(name)
+					if (option && isOn(option)) return null
+					if (ui.messageSheetOpen && args[1]?.message) {
+						const sheetOption = SHEET_COMPONENT_RULES.get(name)
+						if (sheetOption && isOn(sheetOption)) return null
+					}
+					// The "Transfer to Console" header goes together with its rows
+					if (
+						name === 'TableRowGroup' &&
+						isOn('voiceConsole') &&
+						holdsConsoleButton(args[1]?.children)
+					)
+						return null
+				}
+				return original(...args)
+			}),
+		)
+}
+
+/** Message long-press rows by the icon each one is given */
+const MESSAGE_ROW_ICONS = new Map<string, OptionKey>([
+	['ForwardingIcon', 'msgForward'],
+	['ThreadIcon', 'msgThread'],
+	['ChatMarkUnreadIcon', 'msgMarkUnread'],
+	['RobotIcon', 'msgApps'],
+	['BookmarkOutlineIcon', 'msgBookmark'],
+	['BookmarkIcon', 'msgBookmark'],
+	['ClockIcon', 'msgReminder'],
+	['ChatIcon', 'msgDm'],
+	['AtIcon', 'msgMention'],
+	['LinkIcon', 'msgCopyLink'],
+	['IdIcon', 'msgCopyId'],
+	['CopyIcon', 'msgCopyText'],
+	['FlagIcon', 'msgReport'],
+])
+
+/** True when the row being created was built by Discord's own message sheet */
+function builtByMessageSheet(): boolean {
+	return (new Error().stack ?? '').includes('LongPressMessageActionSheet')
+}
+
+function messageRows(env: Env) {
+	for (const row of new Set<unknown>([Design.ActionSheetRow, Design.TableRow]))
+		if (row)
+			env.cleanup(
+				insteadJSX(row as any, (args, jsx) => {
+					if (ui.messageSheetOpen && !ui.settingsOpen) {
+						const icon = iconComponentName(args[1])
+						const option = icon ? MESSAGE_ROW_ICONS.get(icon) : undefined
+						// Copy User ID shares this icon but comes from another plugin
+						if (
+							option &&
+							isOn(option) &&
+							(icon !== 'CopyIcon' || builtByMessageSheet())
+						)
+							return null
+					}
+					return jsx(args[0], args[1], args[2])
+				}),
+			)
+}
+
+// ---------------------------------------------------------------------------
+// Attach panel buttons
+// ---------------------------------------------------------------------------
+
+/** Each button is a pressable whose first child is the icon that names it */
+const ATTACH_ICONS = new Map<string, OptionKey>([
+	['ImageIcon', 'attachPhotos'],
+	['PollsIcon', 'attachPoll'],
+	['ThreadIcon', 'attachThread'],
+	['AppsIcon', 'attachApps'],
+	['AttachmentIcon', 'attachFiles'],
+])
+
+function attachPanel(env: Env) {
+	const optionOf = (children: unknown): OptionKey | undefined => {
+		for (const child of React.Children.toArray(children as any)) {
+			const icon = ATTACH_ICONS.get(
+				nameOfType((child as { type?: unknown })?.type),
+			)
+			if (icon) return icon
 		}
-		return false
 	}
 
 	for (const factory of ['jsx', 'jsxs'] as const)
 		env.cleanup(
-			instead(ReactJSXRuntime as any, factory, (args: any[], original: any) =>
-				isOn('voiceAddPeople') && !ui.settingsOpen && isBanner(args[1])
-					? null
-					: original(...args),
-			),
+			instead(ReactJSXRuntime as any, factory, (args: any[], original: any) => {
+				if (
+					!ui.settingsOpen &&
+					!ui.messageSheetOpen &&
+					nameOfType(args[0]) === 'PressableOpacity'
+				) {
+					const option = optionOf(args[1]?.children)
+					if (option && isOn(option)) return null
+				}
+				return original(...args)
+			}),
 		)
 }
 
@@ -580,68 +584,31 @@ function voiceBanner(env: Env) {
 // Server header buttons (invite and events, next to the search pill)
 // ---------------------------------------------------------------------------
 
-interface HeaderButtonRule {
-	option: OptionKey
-	/** Icon asset names Discord may use for this button */
-	icons: readonly string[]
-	/** Accessibility label or text, when the icon alone is not enough */
-	label: RegExp
-}
-
-const HEADER_BUTTONS: readonly HeaderButtonRule[] = [
-	{
-		option: 'guildInvite',
-		icons: ['PersonPlusIcon', 'UserPlusIcon', 'UserAddIcon', 'InviteIcon'],
-		label: /invite|add people/i,
-	},
-	{
-		option: 'guildEvents',
-		icons: [
-			'CalendarIcon',
-			'CalendarMonthIcon',
-			'CalendarClockIcon',
-			'EventIcon',
-			'ScheduledEventIcon',
-		],
-		label: /events?\b/i,
-	},
-]
+const HEADER_BUTTON_ICONS = new Map<string, OptionKey>([
+	['GroupPlusIcon', 'guildInvite'],
+	['CalendarIcon', 'guildEvents'],
+])
 
 function serverHeader(env: Env) {
-	let resolved: Array<[HeaderButtonRule, Set<number>]> | undefined
-
-	// Asset ids are looked up on first use, once Discord's assets are registered
-	const rules = () =>
-		(resolved ??= HEADER_BUTTONS.map(rule => [
-			rule,
-			new Set(
-				rule.icons
-					.map(name => getAssetIdByName(name))
-					.filter((id): id is number => typeof id === 'number'),
-			),
-		]))
-
 	env.cleanup(
 		insteadJSX(Design.IconButton, (args, jsx) => {
-			if (!ui.settingsOpen) {
-				const props = args[1] as {
-					icon?: unknown
-					label?: unknown
-					accessibilityLabel?: unknown
-				}
-				const text =
-					textOfProp(props?.accessibilityLabel) ?? textOfProp(props?.label)
-				for (const [rule, ids] of rules())
-					if (
-						isOn(rule.option) &&
-						((typeof props?.icon === 'number' && ids.has(props.icon)) ||
-							(text !== undefined && rule.label.test(text)))
-					)
-						return null
+			const icon = (args[1] as { icon?: unknown } | undefined)?.icon
+			if (typeof icon === 'number' && !ui.settingsOpen) {
+				const name = assetNameById(icon)
+				const option = name ? HEADER_BUTTON_ICONS.get(name) : undefined
+				if (option && isOn(option)) return null
 			}
 			return jsx(args[0], args[1], args[2])
 		}),
 	)
+}
+
+function assetNameById(id: number): string | undefined {
+	try {
+		return AssetsRegistry.getAssetByID(id)?.name
+	} catch {
+		return undefined
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -652,8 +619,10 @@ export function installPatches(env: Env) {
 		profileAndChat,
 		questsAndShop,
 		settingsPage,
-		labelledRows,
-		voiceBanner,
+		trackMessageSheet,
+		messageRows,
+		componentRules,
+		attachPanel,
 		serverHeader,
 	])
 		safely(env, () => install(env))
