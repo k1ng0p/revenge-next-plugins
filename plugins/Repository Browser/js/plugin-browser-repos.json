@@ -33,7 +33,7 @@
     {
       "url": "https://rn.alphexo.dev/",
       "source": "https://github.com/secp192k1/revenge-next-plugins",
-      "discord": "477497542205243392"
+      "discord": "477497542205243392",
       "badges": [
         "Ports"
       ]
@@ -107,11 +107,11 @@
         "Ports",
         "Utility"
       ]
-    }
+    },
     {
       "url": "https://otkusteyler.github.io/Revenge-Next-Plugins/",
       "source": "https://github.com/OTKUSteyler/Revenge-Next-Plugins",
-      "discord": "554071670143451176",
+      "discord": "554071670143451176"
     }
   ]
 }
