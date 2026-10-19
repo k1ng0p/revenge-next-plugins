@@ -9,6 +9,8 @@ const DEBUG: boolean = false
 export interface Settings {
 	/** IDs of the users on the watchlist. */
 	users: string[]
+	/** Also track everyone on the friends list. */
+	friends: boolean
 	status: boolean
 	typing: boolean
 	messages: boolean
@@ -16,6 +18,7 @@ export interface Settings {
 
 export const DefaultSettings: Settings = {
 	users: [],
+	friends: true,
 	status: true,
 	typing: true,
 	messages: true,
@@ -61,6 +64,9 @@ interface MessageCreate {
 	}
 }
 
+/** Typing events repeat about every 10 seconds, so this only skips bursts of events right after a toast. */
+const TypingGap = 5000
+const ToastDuration = 6000
 const MaxMessageLength = 120
 const SnowflakePattern = /^\d{17,20}$/
 
@@ -93,9 +99,9 @@ const getPresenceStore = () =>
 		getStatus(userId: string): string
 	}>
 
-const getTypingStore = () =>
-	Stores.TypingStore as DiscordModules.Flux.Store<{
-		getTypingUsers(channelId: string): Record<string, number>
+const getRelationshipStore = () =>
+	Stores.RelationshipStore as DiscordModules.Flux.Store<{
+		isFriend(userId: string): boolean
 	}>
 
 let logger: DiscordModules.Logger
@@ -105,11 +111,16 @@ let reportError: (error: unknown) => void
 let toastCount = 0
 // The status each tracked user was last seen with, so one change toasts once
 const statuses = new Map<string, string>()
+// When each tracked user was last seen typing in each channel
+const typingSeen = new Map<string, number>()
 
 export const getSettings = () =>
 	({ ...DefaultSettings, ...storage.cache }) as Settings
 
-export const isTracked = (id: string) => getSettings().users.includes(id)
+export function isTracked(id: string) {
+	const { users, friends } = getSettings()
+	return users.includes(id) || (friends && getRelationshipStore().isFriend(id))
+}
 
 export function getUserName(id: string) {
 	const user = getUserStore().getUser(id)
@@ -124,11 +135,10 @@ function showToast(
 	const src =
 		userId && getUserStore().getUser(userId)?.getAvatarURL?.(null, 64, false)
 
-	// A toast already on screen would hold this one back
-	ToastActionCreators.close()
 	ToastActionCreators.open(`watchlist-${++toastCount}`, {
 		text,
 		variant,
+		duration: ToastDuration,
 		icon:
 			userId && typeof src === 'string'
 				? { type: 'avatar', src, alt: getUserName(userId) }
@@ -196,10 +206,12 @@ function onPresence({ updates }: PresenceUpdates) {
 function onTyping({ channelId, userId }: TypingStart) {
 	if (!getSettings().typing || !isTracked(userId)) return
 
-	// Discord repeats this event while someone types. The store only forgets them once they stop or send, so a new session toasts again.
-	const typing = userId in getTypingStore().getTypingUsers(channelId)
-	if (DEBUG) logger.log('typing', userId, channelId, typing)
-	if (typing) return
+	const key = `${userId}:${channelId}`
+	const now = Date.now()
+	const last = typingSeen.get(key) ?? 0
+	typingSeen.set(key, now)
+	if (DEBUG) logger.log('typing', now, key, now - last)
+	if (now - last < TypingGap) return
 
 	showToast(
 		`${getUserName(userId)} is typing in ${describeChannel(getChannelStore().getChannel(channelId))}`,
@@ -209,8 +221,12 @@ function onTyping({ channelId, userId }: TypingStart) {
 
 function onMessage({ channelId, optimistic, message }: MessageCreate) {
 	const author = message?.author
-	if (!getSettings().messages || optimistic || !author || !isTracked(author.id))
-		return
+	if (!author || optimistic) return
+
+	// Sending a message ends their typing session
+	typingSeen.delete(`${author.id}:${channelId}`)
+
+	if (!getSettings().messages || !isTracked(author.id)) return
 
 	const content = message.content?.trim()
 	const text = content
@@ -264,7 +280,10 @@ export default plugin<{ jsonStorage: Settings }>({
 				'MESSAGE_CREATE',
 				observe(onMessage),
 			),
-			() => statuses.clear(),
+			() => {
+				statuses.clear()
+				typingSeen.clear()
+			},
 		)
 	},
 	SettingsComponent,
