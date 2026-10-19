@@ -67,6 +67,11 @@ export const GROUPS = [
 	{
 		title: 'Message menu',
 		options: [
+			{
+				key: 'msgReactions',
+				label: 'Reaction row',
+				hint: 'Emoji reactions at the top of the long-press menu',
+			},
 			{ key: 'msgForward', label: 'Forward', hint: 'Long-press menu row' },
 			{
 				key: 'msgThread',
@@ -107,6 +112,59 @@ export const GROUPS = [
 				key: 'msgMention',
 				label: 'Mention',
 				hint: 'Mentions the author, in the long-press menu',
+			},
+			{
+				key: 'msgCopyText',
+				label: 'Copy Text',
+				hint: 'Long-press menu row',
+			},
+			{
+				key: 'msgCopyLink',
+				label: 'Copy Message Link',
+				hint: 'Long-press menu row',
+			},
+			{
+				key: 'msgCopyId',
+				label: 'Copy Message ID',
+				hint: 'Long-press menu row',
+				preset: true,
+			},
+			{
+				key: 'msgReport',
+				label: 'Report',
+				hint: 'Long-press menu row',
+			},
+		],
+	},
+	{
+		title: 'Attachment menu',
+		options: [
+			{
+				key: 'attachPhotos',
+				label: 'Photos button',
+				hint: 'Bottom bar of the attach panel',
+			},
+			{
+				key: 'attachPoll',
+				label: 'Poll button',
+				hint: 'Bottom bar of the attach panel',
+			},
+			{
+				key: 'attachThread',
+				label: 'Thread button',
+				hint: 'Bottom bar of the attach panel',
+				preset: true,
+			},
+			{
+				key: 'attachApps',
+				label: 'Apps button',
+				hint: 'Bottom bar of the attach panel',
+				preset: true,
+			},
+			{
+				key: 'attachFiles',
+				label: 'Files button',
+				hint: 'Bottom bar of the attach panel',
 			},
 		],
 	},
