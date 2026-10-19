@@ -34,6 +34,14 @@ export default function SettingsComponent({
 
 	return (
 		<Page>
+			<TableRowGroup title="Track">
+				<TableSwitchRow
+					label="Track friends"
+					subLabel="Everyone on your friends list, besides the users you add"
+					value={settings.friends}
+					onValueChange={friends => storage.set({ friends })}
+				/>
+			</TableRowGroup>
 			<TableRowGroup title="Notify me about">
 				{Toggles.map(({ key, label }) => (
 					<TableSwitchRow
