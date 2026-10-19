@@ -6,7 +6,7 @@
       "discord": "641266820187160576",
       "badges": [
         "Developer",
-        "Verified",
+        "Active",
         "Maintainer"
       ]
     },
@@ -34,6 +34,9 @@
       "url": "https://rn.alphexo.dev/",
       "source": "https://github.com/secp192k1/revenge-next-plugins",
       "discord": "477497542205243392"
+      "badges": [
+        "Ports"
+      ]
     },
     {
       "url": "https://rvp.palmdevs.me",
@@ -43,14 +46,6 @@
         "Official",
         "Developer",
         "Trusted"
-      ]
-    },
-    {
-      "url": "https://otkusteyler.github.io/Revenge-Next-Plugins/",
-      "source": "https://github.com/OTKUSteyler/Revenge-Next-Plugins",
-      "discord": "554071670143451176",
-      "badges": [
-        "Ports"
       ]
     },
     {
@@ -112,6 +107,11 @@
         "Ports",
         "Utility"
       ]
+    }
+    {
+      "url": "https://otkusteyler.github.io/Revenge-Next-Plugins/",
+      "source": "https://github.com/OTKUSteyler/Revenge-Next-Plugins",
+      "discord": "554071670143451176",
     }
   ]
 }
