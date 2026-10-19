@@ -38,6 +38,7 @@ interface Channel {
 	id: string
 	type: number
 	name?: string
+	guild_id?: string | null
 	recipients?: string[]
 }
 
@@ -80,6 +81,11 @@ const getUserStore = () =>
 const getChannelStore = () =>
 	Stores.ChannelStore as DiscordModules.Flux.Store<{
 		getChannel(id: string): Channel | undefined
+	}>
+
+const getGuildStore = () =>
+	Stores.GuildStore as DiscordModules.Flux.Store<{
+		getGuild(id: string): { name: string } | undefined
 	}>
 
 const getPresenceStore = () =>
@@ -163,7 +169,8 @@ function describeChannel(channel?: Channel) {
 	if (!channel) return 'a channel'
 	if (channel.type === ChannelType.DM) return 'DM'
 	if (channel.type === ChannelType.GroupDM) return channel.name || 'Group DM'
-	return `#${channel.name}`
+	const guild = channel.guild_id && getGuildStore().getGuild(channel.guild_id)
+	return guild ? `${guild.name} › #${channel.name}` : `#${channel.name}`
 }
 
 function onPresence({ updates }: PresenceUpdates) {
