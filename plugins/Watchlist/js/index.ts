@@ -16,6 +16,8 @@ export interface Settings {
 	activity: boolean
 	typing: boolean
 	messages: boolean
+	/** Put the message itself in the toast, not just that one was sent. */
+	messageContent: boolean
 	voice: boolean
 	screenShare: boolean
 }
@@ -27,6 +29,7 @@ export const DefaultSettings: Settings = {
 	activity: false,
 	typing: true,
 	messages: true,
+	messageContent: false,
 	voice: true,
 	screenShare: true,
 }
@@ -81,6 +84,12 @@ interface VoiceStateUpdates {
 	}[]
 }
 
+interface Mention {
+	id: string
+	username: string
+	global_name?: string | null
+}
+
 interface MessageCreate {
 	channelId: string
 	guildId?: string | null
@@ -90,6 +99,7 @@ interface MessageCreate {
 		content?: string
 		author?: { id: string; username: string; global_name?: string | null }
 		attachments?: unknown[]
+		mentions?: Mention[]
 	}
 }
 
@@ -386,6 +396,22 @@ function onVoice({ voiceStates }: VoiceStateUpdates) {
 	}
 }
 
+/** Toasts only hold plain text, so emojis and mentions are spelled out. */
+function readable(content: string, mentions: Mention[] = []) {
+	return content
+		.replace(/<a?:(\w+):\d+>/g, ':$1:')
+		.replace(/<@!?(\d+)>/g, (_, id: string) => {
+			const user = mentions.find(mention => mention.id === id)
+			return `@${getUserStore().getUser(id) ? getUserName(id) : user?.global_name || user?.username || 'user'}`
+		})
+		.replace(/<@&\d+>/g, '@role')
+		.replace(
+			/<#(\d+)>/g,
+			(_, id: string) =>
+				`#${getChannelStore().getChannel(id)?.name ?? 'channel'}`,
+		)
+}
+
 function onMessage({ channelId, guildId, optimistic, message }: MessageCreate) {
 	const author = message?.author
 	if (
@@ -397,14 +423,17 @@ function onMessage({ channelId, guildId, optimistic, message }: MessageCreate) {
 	)
 		return
 
-	const content = message.content?.trim()
-	const text = content
-		? content.length > MaxMessageLength
+	const content = getSettings().messageContent
+		? readable(message.content?.trim() ?? '', message.mentions).trim()
+		: ''
+	const preview =
+		content.length > MaxMessageLength
 			? `${content.slice(0, MaxMessageLength)}...`
 			: content
-		: message.attachments?.length
-			? 'Sent an attachment'
-			: 'Sent a message'
+	const where = describeChannel(channelId, guildId)
+	const sent = message.attachments?.length
+		? 'sent an attachment'
+		: 'sent a message'
 
 	const name = getUserStore().getUser(author.id)
 		? getUserName(author.id)
@@ -412,7 +441,7 @@ function onMessage({ channelId, guildId, optimistic, message }: MessageCreate) {
 
 	showToast(
 		`message-${message.id}`,
-		`${name} in ${describeChannel(channelId, guildId)}: ${text}`,
+		preview ? `${name} in ${where}: ${preview}` : `${name} ${sent} in ${where}`,
 		author.id,
 	)
 }
