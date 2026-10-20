@@ -3,6 +3,7 @@ import Page from '@revenge-mod/components/Page'
 import TableRowAssetIcon from '@revenge-mod/components/TableRowAssetIcon'
 import { Design } from '@revenge-mod/discord/design'
 import { useState } from 'react'
+import { ScrollView } from 'react-native'
 import { DefaultSettings, getUserName, trackUser, untrackUser } from '.'
 import type { PluginSettingsComponent } from '@revenge-mod/plugins/types'
 import type { ComponentProps } from 'react'
@@ -11,6 +12,7 @@ import type { Settings } from '.'
 const {
 	Button,
 	IconButton,
+	Stack,
 	TableRow,
 	TableRowGroup,
 	TableSwitchRow,
@@ -46,61 +48,72 @@ export default function SettingsComponent({
 
 	return (
 		<Page>
-			<TableRowGroup title="Track">
-				<TableSwitchRow
-					label="Track friends"
-					icon={<TableRowAssetIcon name="FriendsIcon" />}
-					subLabel="Everyone on your friends list, besides the users you add"
-					value={settings.friends}
-					onValueChange={friends => storage.set({ friends })}
-				/>
-			</TableRowGroup>
-			<TableRowGroup title="Notify me about">
-				{Toggles.map(({ key, label, icon }) => (
-					<TableSwitchRow
-						key={key}
-						label={label}
-						icon={<TableRowAssetIcon name={icon} />}
-						value={settings[key]}
-						onValueChange={value => storage.set({ [key]: value })}
-					/>
-				))}
-			</TableRowGroup>
-			<TextInput
-				label="Track a user by ID"
-				placeholder="User ID"
-				value={userId}
-				onChange={setUserId}
-				isClearable
-			/>
-			<Button
-				text="Add to Watchlist"
-				icon={getAssetIdByName('UserPlusIcon')}
-				onPress={async () => {
-					if (await trackUser(userId.trim())) setUserId('')
-				}}
-			/>
-			<TableRowGroup title={`Tracked users (${settings.users.length})`}>
-				{settings.users.length ? (
-					settings.users.map(id => (
-						<TableRow
-							key={id}
-							label={getUserName(id)}
-							subLabel={id}
-							trailing={
-								<IconButton
-									icon={getAssetIdByName('UserMinusIcon')!}
-									variant="tertiary"
-									size="sm"
-									onPress={() => untrackUser(id)}
-								/>
-							}
+			<ScrollView>
+				<Stack spacing={24}>
+					<TableRowGroup title="Track & Toast">
+						<TableSwitchRow
+							label="Track friends"
+							icon={<TableRowAssetIcon name="FriendsIcon" />}
+							subLabel="Everyone on your friends list, besides the users you add"
+							value={settings.friends}
+							onValueChange={friends => storage.set({ friends })}
 						/>
-					))
-				) : (
-					<TableRow label="Nobody is on your Watchlist yet" />
-				)}
-			</TableRowGroup>
+						<TableSwitchRow
+							label="Show message content"
+							icon={<TableRowAssetIcon name="TranscriptOutlineIcon" />}
+							subLabel="Off only says that a message was sent"
+							value={settings.messageContent}
+							onValueChange={messageContent => storage.set({ messageContent })}
+						/>
+					</TableRowGroup>
+					<TableRowGroup title="Notify me about">
+						{Toggles.map(({ key, label, icon }) => (
+							<TableSwitchRow
+								key={key}
+								label={label}
+								icon={<TableRowAssetIcon name={icon} />}
+								value={settings[key]}
+								onValueChange={value => storage.set({ [key]: value })}
+							/>
+						))}
+					</TableRowGroup>
+					<TextInput
+						label="Track a user by ID"
+						placeholder="User ID"
+						value={userId}
+						onChange={setUserId}
+						isClearable
+					/>
+					<Button
+						text="Add to Watchlist"
+						icon={getAssetIdByName('UserPlusIcon')}
+						onPress={async () => {
+							if (await trackUser(userId.trim())) setUserId('')
+						}}
+					/>
+					<TableRowGroup title={`Tracked users (${settings.users.length})`}>
+						{settings.users.length ? (
+							settings.users.map(id => (
+								<TableRow
+									key={id}
+									label={getUserName(id)}
+									subLabel={id}
+									trailing={
+										<IconButton
+											icon={getAssetIdByName('UserMinusIcon')!}
+											variant="tertiary"
+											size="sm"
+											onPress={() => untrackUser(id)}
+										/>
+									}
+								/>
+							))
+						) : (
+							<TableRow label="Nobody is on your Watchlist yet" />
+						)}
+					</TableRowGroup>
+				</Stack>
+			</ScrollView>
 		</Page>
 	)
 }
