@@ -12,19 +12,26 @@ export interface Settings {
 	/** Also track everyone on the friends list. */
 	friends: boolean
 	status: boolean
+	/** Playing, listening, watching and competing activities. */
+	activity: boolean
 	typing: boolean
 	messages: boolean
+	voice: boolean
+	screenShare: boolean
 }
 
 export const DefaultSettings: Settings = {
 	users: [],
 	friends: true,
 	status: true,
+	activity: false,
 	typing: true,
 	messages: true,
+	voice: true,
+	screenShare: true,
 }
 
-const ChannelType = { DM: 1, GroupDM: 3 } as const
+const ChannelType = { DM: 1, Voice: 2, GroupDM: 3, Stage: 13 } as const
 
 export interface User {
 	id: string
@@ -45,8 +52,18 @@ interface Channel {
 	recipients?: string[]
 }
 
+interface Activity {
+	type: number
+	name: string
+	details?: string | null
+}
+
 interface PresenceUpdates {
-	updates?: { user?: { id: string }; status: string }[]
+	updates?: {
+		user?: { id: string }
+		status?: string
+		activities?: Activity[]
+	}[]
 }
 
 interface TypingStart {
@@ -54,21 +71,35 @@ interface TypingStart {
 	userId: string
 }
 
+interface VoiceStateUpdates {
+	voiceStates?: {
+		userId: string
+		channelId?: string | null
+		selfStream?: boolean
+	}[]
+}
+
 interface MessageCreate {
 	channelId: string
 	optimistic?: boolean
 	message?: {
+		id: string
 		content?: string
 		author?: { id: string; username: string; global_name?: string | null }
 		attachments?: unknown[]
 	}
 }
 
-/** Typing events repeat about every 10 seconds, so this only skips bursts of events right after a toast. */
-const TypingGap = 5000
-const ToastDuration = 6000
+const ToastDuration = 5000
 const MaxMessageLength = 120
 const SnowflakePattern = /^\d{17,20}$/
+
+const ActivityVerbs: Record<number, string> = {
+	0: 'playing',
+	2: 'listening to',
+	3: 'watching',
+	5: 'competing in',
+}
 
 const StatusLabels: Record<string, string> = {
 	online: 'online',
@@ -97,6 +128,19 @@ const getGuildStore = () =>
 const getPresenceStore = () =>
 	Stores.PresenceStore as DiscordModules.Flux.Store<{
 		getStatus(userId: string): string
+		getActivities(userId: string): Activity[]
+	}>
+
+const getVoiceStateStore = () =>
+	Stores.VoiceStateStore as DiscordModules.Flux.Store<{
+		getVoiceStateForUser(
+			userId: string,
+		): { channelId?: string | null; selfStream?: boolean } | undefined
+	}>
+
+const getSelectedChannelStore = () =>
+	Stores.SelectedChannelStore as DiscordModules.Flux.Store<{
+		getChannelId(): string | undefined
 	}>
 
 const getRelationshipStore = () =>
@@ -108,11 +152,9 @@ let logger: DiscordModules.Logger
 let storage: JsonStorage<Settings>
 let reportError: (error: unknown) => void
 
-let toastCount = 0
-// The status each tracked user was last seen with, so one change toasts once
+// What each tracked user was last seen with, so one change toasts once
 const statuses = new Map<string, string>()
-// When each tracked user was last seen typing in each channel
-const typingSeen = new Map<string, number>()
+const activities = new Map<string, Activity[]>()
 
 export const getSettings = () =>
 	({ ...DefaultSettings, ...storage.cache }) as Settings
@@ -127,15 +169,19 @@ export function getUserName(id: string) {
 	return user?.globalName || user?.username || id
 }
 
+/** Toasts queue, but one whose key is already on screen is dropped. */
 function showToast(
+	key: string,
 	text: string,
 	userId?: string,
 	variant?: 'success' | 'critical',
 ) {
+	if (DEBUG) logger.log('toast', Date.now(), key)
+
 	const src =
 		userId && getUserStore().getUser(userId)?.getAvatarURL?.(null, 64, false)
 
-	ToastActionCreators.open(`watchlist-${++toastCount}`, {
+	ToastActionCreators.open(`watchlist-${key}`, {
 		text,
 		variant,
 		duration: ToastDuration,
@@ -148,85 +194,201 @@ function showToast(
 
 export async function trackUser(userId: string) {
 	if (!SnowflakePattern.test(userId)) {
-		showToast('Enter a valid user ID', undefined, 'critical')
+		showToast('invalid', 'Enter a valid user ID', undefined, 'critical')
 		return false
 	}
 
 	const { users } = getSettings()
 	if (users.includes(userId)) {
-		showToast(`${getUserName(userId)} is already on your Watchlist`, userId)
+		showToast(
+			`known-${userId}`,
+			`${getUserName(userId)} is already on your Watchlist`,
+			userId,
+		)
 		return false
 	}
 
 	await storage.set({ ...getSettings(), users: [...users, userId] }, true)
-	showToast(`Added ${getUserName(userId)} to your Watchlist`, userId, 'success')
+	showToast(
+		`added-${userId}`,
+		`Added ${getUserName(userId)} to your Watchlist`,
+		userId,
+		'success',
+	)
 
 	return true
 }
 
 export async function untrackUser(userId: string) {
 	statuses.delete(userId)
+	activities.delete(userId)
 
 	const settings = getSettings()
 	await storage.set(
 		{ ...settings, users: settings.users.filter(id => id !== userId) },
 		true,
 	)
-	showToast(`Removed ${getUserName(userId)} from your Watchlist`, userId)
+	showToast(
+		`removed-${userId}`,
+		`Removed ${getUserName(userId)} from your Watchlist`,
+		userId,
+	)
 }
 
 function describeChannel(channel?: Channel) {
 	if (!channel) return 'a channel'
 	if (channel.type === ChannelType.DM) return 'DM'
 	if (channel.type === ChannelType.GroupDM) return channel.name || 'Group DM'
+
 	const guild = channel.guild_id && getGuildStore().getGuild(channel.guild_id)
-	return guild ? `${guild.name} › #${channel.name}` : `#${channel.name}`
+	const isVoice =
+		channel.type === ChannelType.Voice || channel.type === ChannelType.Stage
+	const name = isVoice ? channel.name : `#${channel.name}`
+	return guild ? `${guild.name} › ${name}` : name
 }
 
-function onPresence({ updates }: PresenceUpdates) {
-	if (!getSettings().status) return
+/** Anything happening in the chat that is already open is visible without a toast. */
+const isViewing = (channelId: string) =>
+	getSelectedChannelStore().getChannelId() === channelId
 
-	for (const update of updates ?? []) {
-		const userId = update.user?.id
-		if (!userId || !isTracked(userId)) continue
+function onStatus(userId: string, status: string) {
+	// Dispatch hooks run before the store updates, so the store still holds the old status
+	const previous = statuses.get(userId) ?? getPresenceStore().getStatus(userId)
+	statuses.set(userId, status)
+	if (previous === status) return
 
-		// Dispatch hooks run before the store updates, so the store still holds the old status
-		const previous =
-			statuses.get(userId) ?? getPresenceStore().getStatus(userId)
-		statuses.set(userId, update.status)
-		if (previous === update.status) continue
+	showToast(
+		`status-${userId}-${status}`,
+		`${getUserName(userId)} is now ${StatusLabels[status] ?? status}`,
+		userId,
+	)
+}
+
+const trackedActivities = (list: Activity[] = []) =>
+	list.filter(activity => activity.type in ActivityVerbs)
+
+// Spotify and similar report the track as details, so each new track counts as a new activity
+const describeActivity = ({ type, name, details }: Activity) =>
+	type === 2 && details ? `${details} on ${name}` : name
+
+const startKey = (activity: Activity) =>
+	`${activity.type}:${describeActivity(activity)}`
+
+// Stopping goes by the app, so a track change is not a stop
+const stopKey = ({ type, name }: Activity) => `${type}:${name}`
+
+function onActivities(userId: string, list: Activity[]) {
+	const current = trackedActivities(list)
+	const previous =
+		activities.get(userId) ??
+		trackedActivities(getPresenceStore().getActivities(userId))
+	activities.set(userId, current)
+
+	const name = getUserName(userId)
+
+	for (const activity of current) {
+		if (previous.some(other => startKey(other) === startKey(activity))) continue
 
 		showToast(
-			`${getUserName(userId)} is now ${StatusLabels[update.status] ?? update.status}`,
+			`activity-${userId}-${startKey(activity)}`,
+			`${name} is ${ActivityVerbs[activity.type]} ${describeActivity(activity)}`,
+			userId,
+		)
+	}
+
+	for (const activity of previous) {
+		if (current.some(other => stopKey(other) === stopKey(activity))) continue
+
+		showToast(
+			`activity-stop-${userId}-${stopKey(activity)}`,
+			`${name} stopped ${ActivityVerbs[activity.type]} ${activity.name}`,
 			userId,
 		)
 	}
 }
 
-function onTyping({ channelId, userId }: TypingStart) {
-	if (!getSettings().typing || !isTracked(userId)) return
+function onPresence({ updates }: PresenceUpdates) {
+	const { status, activity } = getSettings()
 
-	const key = `${userId}:${channelId}`
-	const now = Date.now()
-	const last = typingSeen.get(key) ?? 0
-	typingSeen.set(key, now)
-	if (DEBUG) logger.log('typing', now, key, now - last)
-	if (now - last < TypingGap) return
+	for (const update of updates ?? []) {
+		const userId = update.user?.id
+		if (!userId || !isTracked(userId)) continue
+
+		if (status && update.status) onStatus(userId, update.status)
+		if (activity && update.activities) onActivities(userId, update.activities)
+	}
+}
+
+function onTyping({ channelId, userId }: TypingStart) {
+	if (!getSettings().typing || !isTracked(userId) || isViewing(channelId))
+		return
+
+	if (DEBUG) logger.log('typing', Date.now(), userId, channelId)
 
 	showToast(
+		`typing-${userId}-${channelId}`,
 		`${getUserName(userId)} is typing in ${describeChannel(getChannelStore().getChannel(channelId))}`,
 		userId,
 	)
 }
 
+function onVoice({ voiceStates }: VoiceStateUpdates) {
+	const { voice, screenShare } = getSettings()
+
+	for (const state of voiceStates ?? []) {
+		const { userId, channelId } = state
+		if (!isTracked(userId)) continue
+
+		// The store still holds the state from before this update
+		const previous = getVoiceStateStore().getVoiceStateForUser(userId)
+		const inChannel = channelId ?? previous?.channelId
+		if (!inChannel || isViewing(inChannel)) continue
+
+		const name = getUserName(userId)
+		const where = describeChannel(getChannelStore().getChannel(inChannel))
+
+		if (voice) {
+			if (!channelId)
+				showToast(
+					`voice-left-${userId}-${inChannel}`,
+					`${name} left voice in ${where}`,
+					userId,
+				)
+			else if (previous?.channelId !== channelId)
+				showToast(
+					`voice-${userId}-${channelId}`,
+					`${name} joined voice in ${where}`,
+					userId,
+				)
+		}
+
+		if (!screenShare || !channelId) continue
+
+		if (state.selfStream && !previous?.selfStream)
+			showToast(
+				`screen-${userId}-${channelId}`,
+				`${name} started screen sharing in ${where}`,
+				userId,
+			)
+		else if (!state.selfStream && previous?.selfStream)
+			showToast(
+				`screen-stop-${userId}-${channelId}`,
+				`${name} stopped screen sharing in ${where}`,
+				userId,
+			)
+	}
+}
+
 function onMessage({ channelId, optimistic, message }: MessageCreate) {
 	const author = message?.author
-	if (!author || optimistic) return
-
-	// Sending a message ends their typing session
-	typingSeen.delete(`${author.id}:${channelId}`)
-
-	if (!getSettings().messages || !isTracked(author.id)) return
+	if (
+		!getSettings().messages ||
+		optimistic ||
+		!author ||
+		!isTracked(author.id) ||
+		isViewing(channelId)
+	)
+		return
 
 	const content = message.content?.trim()
 	const text = content
@@ -242,6 +404,7 @@ function onMessage({ channelId, optimistic, message }: MessageCreate) {
 		: author.global_name || author.username
 
 	showToast(
+		`message-${message.id}`,
 		`${name} in ${describeChannel(getChannelStore().getChannel(channelId))}: ${text}`,
 		author.id,
 	)
@@ -276,13 +439,17 @@ export default plugin<{ jsonStorage: Settings }>({
 				observe(onPresence),
 			),
 			onFluxEventDispatched<TypingStart>('TYPING_START', observe(onTyping)),
+			onFluxEventDispatched<VoiceStateUpdates>(
+				'VOICE_STATE_UPDATES',
+				observe(onVoice),
+			),
 			onFluxEventDispatched<MessageCreate>(
 				'MESSAGE_CREATE',
 				observe(onMessage),
 			),
 			() => {
 				statuses.clear()
-				typingSeen.clear()
+				activities.clear()
 			},
 		)
 	},
