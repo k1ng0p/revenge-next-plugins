@@ -49,6 +49,7 @@ interface Channel {
 	type: number
 	name?: string
 	guild_id?: string | null
+	guildId?: string | null
 	recipients?: string[]
 }
 
@@ -75,12 +76,14 @@ interface VoiceStateUpdates {
 	voiceStates?: {
 		userId: string
 		channelId?: string | null
+		guildId?: string | null
 		selfStream?: boolean
 	}[]
 }
 
 interface MessageCreate {
 	channelId: string
+	guildId?: string | null
 	optimistic?: boolean
 	message?: {
 		id: string
@@ -235,12 +238,16 @@ export async function untrackUser(userId: string) {
 	)
 }
 
-function describeChannel(channel?: Channel) {
+function describeChannel(channelId: string, fallbackGuildId?: string | null) {
+	const channel = getChannelStore().getChannel(channelId)
 	if (!channel) return 'a channel'
 	if (channel.type === ChannelType.DM) return 'DM'
 	if (channel.type === ChannelType.GroupDM) return channel.name || 'Group DM'
 
-	const guild = channel.guild_id && getGuildStore().getGuild(channel.guild_id)
+	const guildId = channel.guild_id ?? channel.guildId ?? fallbackGuildId
+	const guild = guildId ? getGuildStore().getGuild(guildId) : undefined
+	if (DEBUG && !guild) logger.log('no guild', channelId, guildId)
+
 	const isVoice =
 		channel.type === ChannelType.Voice || channel.type === ChannelType.Stage
 	const name = isVoice ? channel.name : `#${channel.name}`
@@ -327,7 +334,7 @@ function onTyping({ channelId, userId }: TypingStart) {
 
 	showToast(
 		`typing-${userId}-${channelId}`,
-		`${getUserName(userId)} is typing in ${describeChannel(getChannelStore().getChannel(channelId))}`,
+		`${getUserName(userId)} is typing in ${describeChannel(channelId)}`,
 		userId,
 	)
 }
@@ -345,7 +352,7 @@ function onVoice({ voiceStates }: VoiceStateUpdates) {
 		if (!inChannel || isViewing(inChannel)) continue
 
 		const name = getUserName(userId)
-		const where = describeChannel(getChannelStore().getChannel(inChannel))
+		const where = describeChannel(inChannel, state.guildId)
 
 		if (voice) {
 			if (!channelId)
@@ -379,7 +386,7 @@ function onVoice({ voiceStates }: VoiceStateUpdates) {
 	}
 }
 
-function onMessage({ channelId, optimistic, message }: MessageCreate) {
+function onMessage({ channelId, guildId, optimistic, message }: MessageCreate) {
 	const author = message?.author
 	if (
 		!getSettings().messages ||
@@ -405,7 +412,7 @@ function onMessage({ channelId, optimistic, message }: MessageCreate) {
 
 	showToast(
 		`message-${message.id}`,
-		`${name} in ${describeChannel(getChannelStore().getChannel(channelId))}: ${text}`,
+		`${name} in ${describeChannel(channelId, guildId)}: ${text}`,
 		author.id,
 	)
 }
