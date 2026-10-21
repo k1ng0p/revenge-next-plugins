@@ -5,7 +5,7 @@
 	"description": "Reply to friends' custom statuses straight from their profile, just like the desktop app.",
 	"icon": "ic_swipe_reply_24px",
 	"author": "k1ng_op <641266820187160576> (https://github.com/k1ng0p \"GitHub\")",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"dependencies": {
 		"revenge.api": {
 			"version": ">=1 <2"
