@@ -1,7 +1,7 @@
 import { Design } from '@revenge-mod/discord/design'
 import { useState } from 'react'
 
-export interface ReplyModalProps {
+interface ReplyModalProps {
 	name: string
 	status: string
 	onSend(text: string): void
