@@ -1,7 +1,9 @@
+import { Checkbox } from '@revenge-mod/components'
 import { Design } from '@revenge-mod/discord/design'
 import { React, ReactNative } from '@revenge-mod/react'
-import { cachedAvatar, catalog, discordUser, githubAvatar, newRepoCount, parseAuthor, unreadCount, useStore } from './data'
-import { AVATAR_SIZE, NOTICE, asset, h, icon, inform, isRemote } from './shared'
+import { cachedAvatar, catalog, discordUser, githubAvatar, newRepoCount, unreadCount, useStore } from './data'
+import { AVATAR_SIZE, ICON_INDENT, NOTICE, asset, h, icon, iconSlot, inform, isRemote } from './shared'
+import { PluginByline, WarningNote } from './sheets'
 import type { ListedPlugin, Listing, Repo } from './shared'
 export type CardUpdate = { from: string; to: string; state: 'ready' | 'busy' | 'pending'; onPress: () => void }
 
@@ -40,13 +42,26 @@ export function RepoAvatar({ repo, listing, epoch, person }: { repo: Repo; listi
 	)
 }
 
-export function PluginCard(props: { plugin: ListedPlugin; version?: string; origin?: string; actions: any[]; update?: CardUpdate; onPress?: () => void }) {
-	const { plugin, version, origin, actions, update, onPress } = props
+type PluginCardProps = {
+	plugin: ListedPlugin
+	version?: string
+	origin?: string
+	actions: any[]
+	update?: CardUpdate
+	warning?: string
+	selectable?: boolean
+	selected?: boolean
+	onPress?: () => void
+	onLongPress?: () => void
+}
+
+export function PluginCard(props: PluginCardProps) {
+	const { plugin, version, origin, actions, update, warning, selectable, selected, onPress, onLongPress } = props
 	const { Pressable, View } = ReactNative
 	const { Button, Card, Text } = Design
 	return h(
 		Pressable,
-		{ onPress },
+		{ onPress, onLongPress, delayLongPress: 350 },
 		h(
 			Card,
 			{ style: { paddingVertical: 12, paddingHorizontal: 12 } },
@@ -59,19 +74,21 @@ export function PluginCard(props: { plugin: ListedPlugin; version?: string; orig
 					h(
 						View,
 						{ style: { flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0 } },
-						icon(plugin.icon, 'PuzzlePieceIcon'),
-						h(Text, { variant: 'heading-lg/semibold', style: { flex: 1, marginLeft: 8 } }, plugin.name),
+						iconSlot(icon(plugin.icon, 'PuzzlePieceIcon')),
+						h(Text, { variant: 'heading-lg/semibold', style: { flex: 1 } }, plugin.name),
 					),
-					h(
-						View,
-						{ style: { flexDirection: 'row', alignItems: 'center', marginLeft: 8 } },
-						...actions.filter(Boolean).map((action, index) => h(View, { key: index, style: { marginLeft: index ? 8 : 0 } }, action)),
-					),
+					selectable
+						? h(View, { style: { marginLeft: 8 } }, h(Checkbox, { checked: !!selected, onToggle: onPress }))
+						: h(
+								View,
+								{ style: { flexDirection: 'row', alignItems: 'center', marginLeft: 8 } },
+								...actions.filter(Boolean).map((action, index) => h(View, { key: index, style: { marginLeft: index ? 8 : 0 } }, action)),
+							),
 				),
 				h(
 					View,
-					{ style: { paddingLeft: 32, marginTop: 6 } },
-					h(Text, { color: 'text-muted', variant: 'heading-md/medium' }, `by ${parseAuthor(plugin.author).name}${version ? ` \u2022 ${version}` : ''}`),
+					{ style: { paddingLeft: ICON_INDENT, marginTop: 6 } },
+					h(PluginByline, { plugin, version }),
 					origin && h(Text, { color: 'text-muted', variant: 'text-sm/medium', style: { marginTop: 2 } }, origin),
 					h(Text, { variant: 'text-md/medium', style: { marginTop: 4 } }, plugin.description),
 					update &&
@@ -85,6 +102,7 @@ export function PluginCard(props: { plugin: ListedPlugin; version?: string; orig
 							),
 							update.state !== 'pending' && h(Button, { text: 'Update', size: 'sm', icon: asset('DownloadIcon'), loading: update.state === 'busy', onPress: update.onPress }),
 						),
+					warning ? h(WarningNote, { text: warning }) : null,
 				),
 			),
 		),
@@ -164,32 +182,81 @@ export function RepoCount() {
 	)
 }
 
-const BADGE_COLORS: Record<string, string> = {
-	official: '#5865F2',
-	developer: '#5865F2',
-	verified: '#248046',
-	trusted: '#248046',
-	reviewed: '#248046',
-	popular: '#8E44AD',
-	new: '#EB459E',
-	beta: '#C77D0A',
-	unmaintained: '#C77D0A',
-	caution: '#DA373C',
-	deprecated: '#DA373C',
+type BadgeShape = 'circle' | 'triangle' | 'diamond' | 'star'
+type BadgeTone = { fill: string; border: string; text: string; shape?: BadgeShape; shapeColor?: string }
+
+const RARITY_COMMON: BadgeTone = { fill: '#242426', border: '#64656A', text: '#FFFFFF', shape: 'circle' }
+const RARITY_RARE: BadgeTone = { fill: '#15183B', border: '#4A53C0', text: '#FFFFFF', shape: 'triangle' }
+const RARITY_EPIC: BadgeTone = { fill: '#25153A', border: '#E255C0', text: '#FFFFFF', shape: 'diamond' }
+const RARITY_MYTHIC: BadgeTone = { fill: '#3D1A04', border: '#C78F66', text: '#F8C29C', shape: 'star' }
+const SECONDARY: BadgeTone = { fill: '#1E1E20', border: '#2F2F31', text: '#FFFFFF' }
+const EXPRESSIVE: BadgeTone = { fill: '#FFFFFF', border: '#FFFFFF', text: '#3A3B3D' }
+const WARNING: BadgeTone = { fill: '#DA373C', border: '#DA373C', text: '#FFFFFF' }
+
+const BADGE_TONES: Record<string, BadgeTone> = {
+	ports: RARITY_COMMON,
+	themes: RARITY_COMMON,
+	utility: RARITY_COMMON,
+	popular: RARITY_RARE,
+	active: RARITY_RARE,
+	new: RARITY_RARE,
+	trusted: RARITY_RARE,
+	maintainer: RARITY_RARE,
+	developer: RARITY_EPIC,
+	reviewed: RARITY_EPIC,
+	contributor: RARITY_EPIC,
+	official: RARITY_MYTHIC,
+	verified: RARITY_MYTHIC,
+	beta: SECONDARY,
+	unmaintained: WARNING,
+	deprecated: WARNING,
+	caution: WARNING,
+	archived: WARNING,
+	unsafe: WARNING,
+}
+
+const MAX_BADGES = 4
+
+function BadgeShapeIcon({ shape, color }: { shape: BadgeShape; color: string }) {
+	const { Image, View } = ReactNative
+	const gap = { marginRight: 5 }
+	if (shape === 'circle') return h(View, { style: { ...gap, width: 9, height: 9, borderRadius: 5, backgroundColor: color } })
+	if (shape === 'triangle') {
+		return h(View, {
+			style: { ...gap, width: 0, height: 0, borderLeftWidth: 5, borderRightWidth: 5, borderBottomWidth: 9, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: color },
+		})
+	}
+	if (shape === 'diamond') return h(View, { style: { ...gap, width: 8, height: 8, backgroundColor: color, transform: [{ rotate: '45deg' }] } })
+	const star = asset('StarIcon')
+	return star ? h(Image, { source: star, style: { ...gap, width: 11, height: 11, tintColor: color } }) : null
+}
+
+function Badge({ label }: { label: string }) {
+	const { View } = ReactNative
+	const { Text } = Design
+	const tone = BADGE_TONES[label.toLowerCase()] ?? EXPRESSIVE
+	return h(
+		View,
+		{
+			style: {
+				flexDirection: 'row',
+				alignItems: 'center',
+				paddingHorizontal: 9,
+				paddingVertical: 2,
+				borderRadius: 999,
+				borderWidth: 1,
+				borderColor: tone.border,
+				backgroundColor: tone.fill,
+				marginRight: 6,
+				marginBottom: 4,
+			},
+		},
+		tone.shape ? h(BadgeShapeIcon, { shape: tone.shape, color: tone.shapeColor ?? tone.text }) : null,
+		h(Text, { variant: 'text-xs/bold', numberOfLines: 1, style: { color: tone.text } }, label.toUpperCase()),
+	)
 }
 
 export function RepoBadges({ badges }: { badges: string[] }) {
 	const { View } = ReactNative
-	const { Text } = Design
-	return h(
-		View,
-		{ style: { flexDirection: 'row', flexWrap: 'wrap' } },
-		...badges.map(label =>
-			h(
-				View,
-				{ key: label, style: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 8, marginRight: 4, marginBottom: 2, backgroundColor: BADGE_COLORS[label.toLowerCase()] ?? '#4E5058' } },
-				h(Text, { variant: 'text-xs/semibold', style: { color: '#FFFFFF' } }, label),
-			),
-		),
-	)
+	return h(View, { style: { flexDirection: 'row', flexWrap: 'wrap' } }, ...badges.slice(0, MAX_BADGES).map(label => h(Badge, { key: label, label })))
 }

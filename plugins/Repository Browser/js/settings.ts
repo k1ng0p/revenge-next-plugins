@@ -2,6 +2,7 @@ import { FormSwitch, SearchInput } from '@revenge-mod/components'
 import { Design } from '@revenge-mod/discord/design'
 import { React, ReactNative } from '@revenge-mod/react'
 import { FeedSection, Notice, PluginCard, RepoAvatar, RepoBadges } from './components'
+import { openBulkInstallSheet, openPluginSheet } from './sheets'
 import type { CardUpdate } from './components'
 import {
 	catalog,
@@ -21,9 +22,10 @@ import {
 	useStore,
 } from './data'
 import type { SeenEntry } from './data'
-import { available, install, openPluginSettings, pendingReload, putRepos, readState, toggle, uninstall, updatePlugins } from './revenge'
+import { available, blocked, install, installMany, openPluginSettings, pendingReload, putRepos, readState, toggle, uninstall, updatePlugins } from './revenge'
+import type { BulkItem } from './revenge'
 import type { RevengeState } from './revenge'
-import { ALERT_MODES, DAY, PAGE_SIZE, SORTS, ago, asset, fail, formatSize, friendlyError, h, hostOf, icon, modal, reportError, slash } from './shared'
+import { ALERT_MODES, DAY, PAGE_SIZE, SORTS, ago, asset, compatibilityWarning, fail, friendlyError, h, hostOf, icon, modal, reportError, slash } from './shared'
 import type { AlertMode, AvailableUpdate, ListedPlugin, Repo, SortKey } from './shared'
 
 type Hit = { repo: Repo; plugin: ListedPlugin }
@@ -40,7 +42,8 @@ function useBrowser() {
 	const seen: Record<string, SeenEntry> = data?.seen ?? {}
 	const newRepos: Record<string, number> = data?.newRepos ?? {}
 	const [current, setCurrent] = React.useState<Repo | null>(null)
-	const [detail, setDetail] = React.useState<{ repo: Repo; id: string } | null>(null)
+	const [selection, setSelection] = React.useState<Record<string, Hit>>({})
+	const [bulkBusy, setBulkBusy] = React.useState(false)
 	const [updatingIds, setUpdatingIds] = React.useState<string[]>([])
 	const [authorNames, setAuthorNames] = React.useState<Record<string, string>>({})
 	const [state, setState] = React.useState<RevengeState | null>(null)
@@ -139,15 +142,17 @@ function useBrowser() {
 		}
 	}, [current, epoch])
 
+	const selecting = Object.keys(selection).length > 0
+
 	React.useEffect(() => {
-		if (!current && !detail) return
+		if (!current && !selecting) return
 		const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-			if (detail) setDetail(null)
+			if (selecting) setSelection({})
 			else showList()
 			return true
 		})
 		return () => subscription.remove()
-	}, [current, detail])
+	}, [current, selecting])
 
 	React.useEffect(() => setLimit(PAGE_SIZE), [query, current, sort])
 
@@ -279,9 +284,50 @@ function useBrowser() {
 		]
 	}
 
+	const toggleSelect = (repo: Repo, plugin: ListedPlugin) =>
+		setSelection(current => {
+			const next = { ...current }
+			if (next[plugin.id]?.repo.url === repo.url) delete next[plugin.id]
+			else next[plugin.id] = { repo, plugin }
+			return next
+		})
+
+	const installSelected = async () => {
+		if (bulkBusy) return
+		const items: BulkItem[] = (Object.values(selection) as Hit[])
+			.filter(({ plugin }) => !state?.installed.has(plugin.id))
+			.map(({ repo, plugin }) => ({
+				id: plugin.id,
+				name: plugin.name,
+				repo: repo.url,
+				repoName: repoName(repo),
+				version: plugin.version,
+				size: plugin.size,
+				description: plugin.description,
+				icon: plugin.icon,
+			}))
+		if (!items.length) {
+			setSelection({})
+			return
+		}
+
+		const missing = [...new Set(items.filter(item => !addedRepo(item.repo)?.enabled).map(item => item.repoName))]
+		if (!(await openBulkInstallSheet(items, missing))) return
+
+		setBulkBusy(true)
+		try {
+			if (await installMany(items)) setSelection({})
+			await syncState()
+		} finally {
+			setBulkBusy(false)
+		}
+	}
+
 	const pluginCard = (repo: Repo, plugin: ListedPlugin, fromSearch = false) => {
+		const installed = state?.installed.has(plugin.id) ?? false
 		const version = state?.installed.get(plugin.id)?.version ?? plugin.version
 		const origin = fromSearch ? `from ${repoName(repo)}${addedRepo(repo.url)?.enabled ? '' : ' \u2022 repository not added'}` : undefined
+		const selectable = selecting && !installed
 		return h(PluginCard, {
 			key: `${repo.url}#${plugin.id}`,
 			plugin,
@@ -289,7 +335,11 @@ function useBrowser() {
 			origin,
 			actions: pluginActions(repo, plugin, fromSearch),
 			update: updateFor(repo, plugin),
-			onPress: () => setDetail({ repo, id: plugin.id }),
+			warning: compatibilityWarning(plugin, state?.discord, blocked.get(plugin.id)?.text),
+			selectable,
+			selected: selection[plugin.id]?.repo.url === repo.url,
+			onPress: selectable ? () => toggleSelect(repo, plugin) : () => openPluginSheet({ repo, plugin, onChange: syncState }),
+			onLongPress: installed ? undefined : () => toggleSelect(repo, plugin),
 		})
 	}
 
@@ -348,8 +398,11 @@ function useBrowser() {
 		seen,
 		newRepos,
 		current,
-		detail,
-		setDetail,
+		selection,
+		selecting,
+		bulkBusy,
+		setSelection,
+		installSelected,
 		updatingIds,
 		authorNames,
 		state,
@@ -440,7 +493,7 @@ function updatesSection(b: Ctx) {
 			subLabel: `${info.installed} to ${info.available}\nfrom ${b.repoName(repo)}`,
 			subLabelLineClamp: 2,
 			arrow: true,
-			onPress: () => b.setDetail({ repo, id: info.id }),
+			onPress: listed ? () => openPluginSheet({ repo, plugin: listed, onChange: b.syncState }) : undefined,
 		})
 	})
 
@@ -634,139 +687,42 @@ function RepoPage(b: Ctx, repo: Repo) {
 	]
 }
 
-function PluginPage(b: Ctx, repo: Repo, id: string) {
-	const { TableRow, TableRowGroup, TableSwitchRow, Text } = Design
-	const { Linking } = ReactNative
-	const listing = listings.get(repo.url)
-	const plugin = listing?.plugins.find(item => item.id === id)
-	const back = h(TableRow, { key: 'back', label: 'Back', icon: icon('ArrowLargeLeftIcon'), onPress: () => b.setDetail(null) })
-	if (!plugin) {
-		return [
-			h(TableRowGroup, { key: 'head', title: 'Plugin' }, [back]),
-			h(Text, { key: 'gone', variant: 'text-md/medium' }, 'This plugin is no longer listed in this repository.'),
-		]
-	}
+function SelectionBar(b: Ctx) {
+	const { View } = ReactNative
+	const { Button, Card, Stack, Text } = Design
+	if (!b.selecting) return null
 
-	const installed = b.state?.installed.get(id)
-	const entry = b.addedRepo(repo.url)
-	const info = available.get(id)
-	const outdated = !!installed && info?.repo === repo.url && !pendingReload.has(id)
-	const on = b.isEnabled(id)
-	const settingsReady = on && !toggled.has(id) && !b.state?.enabled[id]?.pendingReload
-	const author = parseAuthor(plugin.author)
-
-	const facts = [
-		h(TableRow, {
-			key: 'version',
-			label: 'Version',
-			subLabel: installed ? `Installed ${installed.version}${outdated ? `, ${info!.available} available` : ''}` : `Latest ${plugin.version ?? 'unknown'}`,
-		}),
-		h(TableRow, {
-			key: 'author',
-			label: 'Author',
-			subLabel: author.name,
-			arrow: author.ids.length > 0,
-			onPress: author.ids.length ? () => openUserProfile(author.ids[0]) : undefined,
-		}),
-		h(TableRow, {
-			key: 'repo',
-			label: 'Repository',
-			subLabel: `${b.repoName(repo)}\n${hostOf(repo.url)}`,
-			icon: h(RepoAvatar, { repo, listing, epoch: b.epoch }),
-			arrow: true,
-			onPress: () => {
-				b.setDetail(null)
-				b.showRepo(repo)
-			},
-		}),
-		repo.source && h(TableRow, { key: 'source', label: 'Source', subLabel: repo.source, icon: icon('PaperIcon'), arrow: true, onPress: () => Linking.openURL(repo.source!) }),
-		plugin.size && h(TableRow, { key: 'size', label: 'Size', subLabel: formatSize(plugin.size) }),
-		plugin.requires?.length ? h(TableRow, { key: 'requires', label: 'Requires', subLabel: plugin.requires.join('\n'), subLabelLineClamp: 6 }) : null,
-		h(TableRow, { key: 'id', label: 'Plugin ID', subLabel: id }),
-	]
-
-	const actions: any[] = []
-	if (installed) {
-		if (pendingReload.has(id)) actions.push(h(TableRow, { key: 'updated', label: 'Updated', subLabel: 'Reload to apply it', icon: icon('CircleCheckIcon') }))
-		if (outdated)
-			actions.push(
-				h(TableRow, {
-					key: 'update',
-					label: b.updatingIds.includes(id) ? 'Updating...' : `Update to ${info!.available}`,
-					subLabel: `Installed ${installed.version}`,
-					icon: icon('DownloadIcon'),
-					arrow: true,
-					disabled: b.updatingIds.length > 0,
-					onPress: () => b.runUpdate([id]),
-				}),
-			)
-		actions.push(
-			h(TableSwitchRow, {
-				key: 'enabled',
-				label: on ? 'Enabled' : 'Disabled',
-				icon: icon('CircleCheckIcon'),
-				value: on,
-				onValueChange: (value: boolean) => toggle(id, value).then(done => done && b.afterToggle(id, value)),
-			}),
-		)
-		if (installed.settings)
-			actions.push(
-				h(TableRow, {
-					key: 'settings',
-					label: 'Settings',
-					subLabel: settingsReady ? undefined : 'Enable the plugin and reload to open',
-					icon: icon('SettingsIcon'),
-					arrow: true,
-					disabled: !settingsReady,
-					onPress: () => openPluginSettings(id),
-				}),
-			)
-		actions.push(
-			h(TableRow, {
-				key: 'remove',
-				label: 'Uninstall',
-				variant: 'danger',
-				icon: icon('TrashIcon'),
-				onPress: () => b.removePlugin(plugin),
-			}),
-		)
-	} else if (entry?.enabled) {
-		actions.push(
-			h(TableRow, {
-				key: 'install',
-				label: b.installing === id ? 'Installing...' : 'Install',
-				subLabel: plugin.version ? `Version ${plugin.version}` : undefined,
-				icon: icon('DownloadIcon'),
-				arrow: true,
-				disabled: b.installing === id,
-				onPress: () => b.installPlugin(repo, plugin),
-			}),
-		)
-	} else {
-		actions.push(
-			h(TableRow, {
-				key: 'repo',
-				label: entry ? 'Enable repository' : 'Add repository',
-				subLabel: `${plugin.name} comes from ${b.repoName(repo)}`,
-				icon: icon('DownloadIcon'),
-				arrow: true,
-				onPress: () => putRepos(slash(repo.url), true).then(b.syncState).catch(fail),
-			}),
-		)
-	}
-
-	return [
-		h(TableRowGroup, { key: 'head', title: plugin.name, description: plugin.description }, [back]),
-		h(TableRowGroup, { key: 'about', title: 'About' }, facts.filter(Boolean)),
-		h(TableRowGroup, { key: 'actions', title: 'Actions' }, actions),
-	]
+	const count = Object.keys(b.selection).length
+	return h(
+		View,
+		{ style: { paddingHorizontal: 12, paddingBottom: 12 } },
+		h(
+			Card,
+			{ border: 'strong', style: { padding: 12 } },
+			h(
+				Stack,
+				{ spacing: 8 },
+				h(Text, { variant: 'text-md/semibold' }, `${count} selected`),
+				h(Button, { text: 'Install all', variant: 'primary', icon: asset('DownloadIcon'), loading: b.bulkBusy, disabled: b.bulkBusy, onPress: b.installSelected }),
+				b.current
+					? h(Button, { text: 'Select more from other repositories', variant: 'secondary', disabled: b.bulkBusy, onPress: b.showList })
+					: h(Text, { variant: 'text-sm/medium', color: 'text-muted' }, 'Open another repository to add more plugins.'),
+				h(Button, { text: 'Clear selection', variant: 'tertiary', disabled: b.bulkBusy, onPress: () => b.setSelection({}) }),
+			),
+		),
+	)
 }
 
 export function Browser() {
-	const { ScrollView } = ReactNative
+	const { ScrollView, View } = ReactNative
 	const { Stack } = Design
 	const b = useBrowser()
 
-	const body = b.detail ? PluginPage(b, b.detail.repo, b.detail.id) : b.current ? RepoPage(b, b.current) : MainPage(b)
-	return h(ScrollView, { style: { flex: 1 } }, h(Stack, { spacing: 16, style: { padding: 16 } }, body))
+	const body = b.current ? RepoPage(b, b.current) : MainPage(b)
+	return h(
+		View,
+		{ style: { flex: 1 } },
+		h(ScrollView, { style: { flex: 1 } }, h(Stack, { spacing: 16, style: { padding: 16 } }, body)),
+		SelectionBar(b),
+	)
 }
