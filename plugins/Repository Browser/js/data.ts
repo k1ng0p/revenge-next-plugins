@@ -299,6 +299,8 @@ function cleanListing(raw: any, url: string): Listing {
 			icon: safeIcon(item.icon, url),
 			version: text(item.version, 40),
 			size: typeof item.size === 'number' && Number.isFinite(item.size) ? item.size : undefined,
+			discord: (Array.isArray(item.discord) ? item.discord : []).map((entry: any) => text(entry, 40)).filter(Boolean).slice(0, 20) as string[],
+			contributors: (Array.isArray(item.contributors) ? item.contributors : []).map((entry: any) => text(entry, 120)).filter(Boolean).slice(0, 10) as string[],
 			requires: (Array.isArray(item.requires) ? item.requires : [])
 				.map((entry: any) => text(entry, 100))
 				.filter(Boolean)
@@ -314,6 +316,12 @@ function cleanListing(raw: any, url: string): Listing {
 	}
 }
 
+// every version's Discord requirement, newest first, empty when some version has none
+function discordRanges(plugin: any, latest: any) {
+	const ranges = [latest, ...Object.values<any>(plugin.versions ?? {})].map(build => build?.dependencies?.discord?.version)
+	return ranges.every(range => typeof range === 'string') ? [...new Set<string>(ranges)] : []
+}
+
 function toListing(url: string, json: any): Listing {
 	const plugins = Object.entries<any>(json.plugins)
 		.filter(([, plugin]) => plugin && typeof plugin === 'object')
@@ -327,6 +335,8 @@ function toListing(url: string, json: any): Listing {
 				author: plugin.author,
 				icon: plugin.icon,
 				version,
+				contributors: plugin.contributors,
+				discord: discordRanges(plugin, build),
 				size: build?.size,
 				requires: Object.entries<any>(build?.dependencies ?? {}).map(([dep, info]) => `${dep} ${info?.version ?? ''}${info?.optional ? ' (optional)' : ''}`.trim()),
 			}
@@ -377,7 +387,7 @@ export function parseRepoList(json: any): Repo[] | null {
 			.filter((badge: unknown): badge is string => typeof badge === 'string')
 			.map((badge: string) => badge.trim().slice(0, 16))
 			.filter(Boolean)
-			.slice(0, 3)
+			.slice(0, 4)
 		if (badges.length) repo.badges = badges
 		repos.push(repo)
 	}
@@ -392,8 +402,9 @@ async function fetchRepoList() {
 			const res = await fetch(`${REMOTE_LIST}?t=${Date.now()}`, { signal: controller.signal })
 			if (res.ok) return parseRepoList(await res.json())
 			if (res.status < 500) return null
-		} catch {
-			// offline or timed out, the saved list stays in use
+		} catch (e) {
+			// offline or timed out keeps the saved list, but a list that can't be read is worth reporting
+			if (e instanceof SyntaxError) reportError(e)
 		} finally {
 			clearTimeout(timer)
 		}

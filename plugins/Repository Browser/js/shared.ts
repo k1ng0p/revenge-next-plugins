@@ -17,6 +17,8 @@ export type ListedPlugin = {
 	version?: string
 	size?: number
 	requires?: string[]
+	contributors?: string[]
+	discord?: string[]
 }
 
 export type Listing = {
@@ -28,6 +30,20 @@ export type Listing = {
 	saved?: number
 	stale?: string
 	err?: string
+}
+
+export type PluginRef = { type: 'channel'; channel: string } | { type: 'version'; version: string }
+
+export type RepoListing = {
+	id: string
+	name: string
+	description: string
+	author: string
+	contributors?: string[]
+	icon: string | null
+	channels: Record<string, string>
+	order: string[]
+	versions: Record<string, { size: number }>
 }
 
 export type AvailableUpdate = { id: string; installed: string; available: string; channel: string; repo: string }
@@ -46,6 +62,10 @@ export const POLL_INTERVAL = 15 * 60 * 1000
 export const RECHECK_AFTER_FOCUS = 5 * 60 * 1000
 export const MAX_REQUESTS = 4
 export const PAGE_SIZE = 30
+
+export const ICON_SLOT = 28
+export const ICON_GAP = 8
+export const ICON_INDENT = ICON_SLOT + ICON_GAP
 
 export const SORTS = {
 	default: 'Default',
@@ -74,7 +94,11 @@ export const errorMessage = (e: any): string => e?.message ?? String(e)
 export const hostOf = (url: string) => url.match(/^https:\/\/([^/]+)/)?.[1] ?? url
 export const asObject = (value: any): Record<string, any> => (value && typeof value === 'object' && !Array.isArray(value) ? value : {})
 export const friendlyError = (err: string) => (/network request failed/i.test(err) ? "Couldn't connect to this repository" : err)
-export const formatSize = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`)
+export function formatBytes(bytes: number) {
+	if (bytes < 1024) return `${bytes} B`
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
 
 export function ago(time: number) {
 	const minutes = Math.floor((Date.now() - time) / 60000)
@@ -168,3 +192,44 @@ export const confirm = (title: string, text: string, label = 'Install', variant 
 			() => done(false),
 		),
 	)
+
+// icon and title share a fixed-width slot so the text below lines up with the title
+export const iconSlot = (content: any) => h(ReactNative.View, { style: { width: ICON_SLOT, alignItems: 'center', justifyContent: 'center', marginRight: ICON_GAP } }, content)
+
+const parseVersion = (value: string) => value.split('.').map(part => parseInt(part, 10) || 0)
+
+function compareVersions(a: number[], b: number[]) {
+	for (let index = 0; index < Math.max(a.length, b.length); index++) {
+		const diff = (a[index] ?? 0) - (b[index] ?? 0)
+		if (diff) return diff
+	}
+	return 0
+}
+
+// ranges this doesn't understand count as satisfied, so a warning only shows when it is certain
+export function satisfiesRange(version: string, range: string) {
+	const current = parseVersion(version)
+	return range.split('||').some(set =>
+		set
+			.trim()
+			.split(/\s+/)
+			.filter(Boolean)
+			.every(token => {
+				const match = token.match(/^(>=|<=|>|<|=)?v?(\d+(?:\.\d+)*)$/)
+				if (!match) return true
+				const diff = compareVersions(current, parseVersion(match[2]))
+				if (match[1] === '>=') return diff >= 0
+				if (match[1] === '<=') return diff <= 0
+				if (match[1] === '>') return diff > 0
+				if (match[1] === '<') return diff < 0
+				return diff === 0
+			}),
+	)
+}
+
+export function compatibilityWarning(plugin: ListedPlugin, discord?: string, blocked?: string) {
+	if (blocked) return blocked
+	const ranges = plugin.discord
+	if (!ranges?.length || !discord) return undefined
+	return ranges.some(range => satisfiesRange(discord, range)) ? undefined : `No version of Discord matching ${ranges[0]} is available`
+}
