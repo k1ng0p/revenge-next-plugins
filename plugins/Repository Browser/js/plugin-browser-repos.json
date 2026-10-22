@@ -5,8 +5,8 @@
       "source": "https://github.com/k1ng0p/revenge-next-plugins",
       "discord": "641266820187160576",
       "badges": [
+        "Trusted",
         "Developer",
-        "Active",
         "Maintainer"
       ]
     },
@@ -51,9 +51,9 @@
       "source": "https://github.com/PalmDevs/revenge-next-plugins",
       "discord": "629368283354628116",
       "badges": [
-        "Official",
+        "Trusted",
         "Developer",
-        "Trusted"
+        "Official"
       ]
     },
     {
@@ -80,7 +80,8 @@
       "source": "https://github.com/OTKUSteyler/Revenge-Next-Plugins",
       "discord": "554071670143451176",
       "badges": [
-        "Trusted"
+        "Trusted",
+        "Ports"
       ]
     },
     {
