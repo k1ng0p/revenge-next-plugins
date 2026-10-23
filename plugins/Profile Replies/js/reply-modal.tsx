@@ -3,14 +3,16 @@ import { useState } from 'react'
 
 interface ReplyModalProps {
 	name: string
-	status: string
+	subject: string
+	quote: string
 	onSend(text: string): void
 	onCancel(): void
 }
 
 export default function ReplyModal({
 	name,
-	status,
+	subject,
+	quote,
 	onSend,
 	onCancel,
 }: ReplyModalProps) {
@@ -19,8 +21,8 @@ export default function ReplyModal({
 
 	return (
 		<AlertModal
-			title={`Reply to ${name}'s status`}
-			content={status}
+			title={`Reply to ${name}'s ${subject}`}
+			content={quote}
 			extraContent={
 				<TextInput
 					autoFocus

@@ -17,8 +17,17 @@ import { lookupGeneratedIconComponent } from '@revenge-mod/utils/discord'
 import { cloneElement, createElement, isValidElement } from 'react'
 import { StyleSheet, View } from 'react-native'
 import ReplyModal from './reply-modal'
+import SettingsComponent from './settings'
 import type { ComponentProps, FC, ReactElement } from 'react'
 import type { StyleProp, ViewStyle } from 'react-native'
+
+export interface Settings {
+	bio: boolean
+}
+
+const DefaultSettings: Settings = {
+	bio: true,
+}
 
 const ALERT_KEY = 'k1ngop.reply-to-status'
 const CUSTOM_STATUS = 4
@@ -31,6 +40,12 @@ const VERBS = {
 
 type Kind = keyof typeof VERBS
 
+interface Target {
+	userId: string
+	subject: 'status' | 'bio'
+	text: string
+}
+
 interface StatusActivity {
 	type?: number
 	state?: string
@@ -41,8 +56,13 @@ interface StatusPillProps {
 	customStatusActivity?: StatusActivity
 }
 
-type StatusPill = (
-	props: StatusPillProps,
+interface BioTextProps {
+	bio?: string
+	userId?: string
+}
+
+type Pill<P> = (
+	props: P,
 ) => ReactElement<{ style?: StyleProp<ViewStyle> }> | null
 
 interface EmojiSelection {
@@ -58,6 +78,10 @@ interface PresenceStore {
 
 interface RelationshipStore {
 	getFriendIDs(): string[]
+}
+
+interface UserStore {
+	getUser(id: string): { globalName?: string; username?: string } | undefined
 }
 
 interface MessageActions {
@@ -82,8 +106,8 @@ interface EmojiPicker {
 	}): void
 }
 
-// The bubble offsets itself with its own root style. Keeping that on the anchor
-// instead lets the menu open on the visible pill and not on the space around it.
+// The status bubble offsets itself with its own root style. Keeping that on the
+// anchor instead lets the menu open on the visible pill and not on the space around it.
 const PLACEMENT_KEYS = new Set([
 	'margin',
 	'marginLeft',
@@ -104,9 +128,11 @@ const PLACEMENT_KEYS = new Set([
 ])
 
 // Unicode picks carry `surrogates`, custom ones come as `id`, `name` and `animated`.
+// The picker suffixes duplicate emoji names with `~n`, which breaks the mention.
 function emojiText({ surrogates, id, name, animated }: EmojiSelection) {
 	if (surrogates) return surrogates
-	if (id && name) return `<${animated ? 'a' : ''}:${name}:${id}>`
+	if (id && name)
+		return `<${animated ? 'a' : ''}:${name.replace(/~\d+$/, '')}:${id}>`
 }
 
 // Server emoji don't render in a quote, so only Unicode emoji are kept.
@@ -119,10 +145,7 @@ function statusText({ emoji, state }: StatusActivity) {
 // Discord epoch is 2015-01-01
 const snowflake = () => (BigInt(Date.now() - 1420070400000) << 22n).toString()
 
-function anchorFor(
-	el: ReactElement<{ style?: StyleProp<ViewStyle> }>,
-	ref: unknown,
-) {
+function anchorFor(el: ReturnType<Pill<never>> & object, ref: unknown) {
 	const style = (StyleSheet.flatten(el.props.style) ?? {}) as Record<
 		string,
 		unknown
@@ -145,8 +168,12 @@ function anchorFor(
 	)
 }
 
-export default plugin({
-	start({ cleanup, plugin }) {
+export default plugin<{ jsonStorage: Settings }>({
+	jsonStorage: {
+		load: true,
+		default: DefaultSettings,
+	},
+	start({ cleanup, jsonStorage: storage, plugin }) {
 		const refs: {
 			presence?: PresenceStore
 			friends?: RelationshipStore
@@ -156,19 +183,19 @@ export default plugin({
 		} = {}
 
 		cleanup(
-			getModules(withProps<PresenceStore>('getActivities'), (m) => {
+			getModules(withProps<PresenceStore>('getActivities'), m => {
 				refs.presence ??= m
 			}),
-			getModules(withProps<RelationshipStore>('getFriendIDs'), (m) => {
+			getModules(withProps<RelationshipStore>('getFriendIDs'), m => {
 				refs.friends ??= m
 			}),
 			getModules(
 				withProps<MessageActions>('sendMessage', 'receiveMessage'),
-				(m) => {
+				m => {
 					refs.messages ??= m
 				},
 			),
-			getModules(withProps<ChannelActions>('ensurePrivateChannel'), (m) => {
+			getModules(withProps<ChannelActions>('ensurePrivateChannel'), m => {
 				refs.channels ??= m
 			}),
 		)
@@ -194,31 +221,19 @@ export default plugin({
 		const ownerOf = (activity: StatusActivity) =>
 			refs.friends
 				?.getFriendIDs()
-				.find((id) =>
+				.find(id =>
 					refs.presence
 						?.getActivities(id)
-						?.some((a) => a.type === CUSTOM_STATUS && a === activity),
+						?.some(a => a.type === CUSTOM_STATUS && a === activity),
 				)
 
 		const nameOf = (userId: string) => {
-			const user = (
-				Stores.UserStore as unknown as {
-					getUser(
-						id: string,
-					): { globalName?: string; username?: string } | undefined
-				}
-			).getUser(userId)
+			const user = (Stores.UserStore as unknown as UserStore).getUser(userId)
 
 			return user?.globalName || user?.username || 'user'
 		}
 
-		async function send(
-			userId: string,
-			name: string,
-			activity: StatusActivity,
-			kind: Kind,
-			body: string,
-		) {
+		async function send(target: Target, kind: Kind, body: string) {
 			try {
 				const { channels, messages } = refs
 
@@ -227,11 +242,12 @@ export default plugin({
 						`Missing Discord module: ${channels ? 'sendMessage' : 'ensurePrivateChannel'}`,
 					)
 
-				const dm = await channels.ensurePrivateChannel(userId)
+				const dm = await channels.ensurePrivateChannel(target.userId)
+				const quote = target.text.replace(/\r?\n/g, '\n> ')
 				const res = await messages.sendMessage(
 					typeof dm === 'string' ? dm : dm.id,
 					{
-						content: `> -# *${VERBS[kind]} ${name}'s status*\n> ${statusText(activity)}\n${body}`,
+						content: `> -# *${VERBS[kind]} ${nameOf(target.userId)}'s ${target.subject}*\n> ${quote}\n${body}`,
 						tts: false,
 						invalidEmojis: [],
 						validNonShortcutEmojis: [],
@@ -253,31 +269,30 @@ export default plugin({
 			}
 		}
 
-		function openReply(userId: string, activity: StatusActivity) {
-			const name = nameOf(userId)
-
+		function openReply(target: Target) {
 			AlertActionCreators.openAlert(
 				ALERT_KEY,
 				<ReplyModal
-					name={name}
-					status={statusText(activity)}
+					name={nameOf(target.userId)}
+					subject={target.subject}
+					quote={target.text}
 					onCancel={() => AlertActionCreators.dismissAlert(ALERT_KEY)}
-					onSend={(reply) => {
+					onSend={reply => {
 						AlertActionCreators.dismissAlert(ALERT_KEY)
-						send(userId, name, activity, 'reply', reply)
+						send(target, 'reply', reply)
 					}}
 				/>,
 			)
 		}
 
-		function openReact(userId: string, activity: StatusActivity) {
+		function openReact(target: Target) {
 			try {
 				const picker = resolvePicker()
 
 				if (!picker) throw new Error('Missing Discord module: emoji picker')
 
 				picker.openEmojiPickerActionSheet({
-					onPressEmoji: (selection) => {
+					onPressEmoji: selection => {
 						const emoji = selection && emojiText(selection)
 
 						if (!emoji)
@@ -286,7 +301,7 @@ export default plugin({
 							})
 
 						ActionSheetActionCreators.hideActionSheet()
-						send(userId, nameOf(userId), activity, 'react', emoji)
+						send(target, 'react', emoji)
 					},
 					pickerIntention: 0,
 					reactionType: 0,
@@ -305,30 +320,28 @@ export default plugin({
 		let ReactionIcon: ReturnType<typeof lookupGeneratedIconComponent>
 		let ReplyIcon: ReturnType<typeof lookupGeneratedIconComponent>
 
-		// Renders the client's own pill inside the menu anchor, like Permission Viewer does with role pills.
-		function StatusPillWithMenu({
-			Pill,
-			...props
-		}: StatusPillProps & { Pill: StatusPill }) {
-			// triggerOnTap is missing from ContextMenuProps but supported by the menu.
+		// triggerOnTap is missing from ContextMenuProps but supported by the menu.
+		function TargetMenu({
+			target,
+			triggerOnTap,
+			children,
+		}: {
+			target: Target
+			triggerOnTap?: boolean
+			children: ComponentProps<typeof Design.ContextMenu>['children']
+		}) {
 			const { ContextMenu: Menu } = Design as {
 				ContextMenu: FC<
 					ComponentProps<typeof Design.ContextMenu> & { triggerOnTap?: boolean }
 				>
 			}
 
-			const el = Pill(props)
-			const activity = props.customStatusActivity
-			const userId = activity && ownerOf(activity)
-
-			if (!isValidElement(el) || !activity || !userId) return el
-
 			ReactionIcon ??= lookupGeneratedIconComponent('ReactionIcon')
 			ReplyIcon ??= lookupGeneratedIconComponent('ArrowAngleLeftUpIcon')
 
 			return (
 				<Menu
-					title={`${nameOf(userId)}'s status`}
+					title={`${nameOf(target.userId)}'s ${target.subject}`}
 					items={[
 						{
 							label: 'React',
@@ -336,7 +349,7 @@ export default plugin({
 							action: () => {
 								clearTimeout(pendingReact)
 								pendingReact = setTimeout(
-									() => openReact(userId, activity),
+									() => openReact(target),
 									MENU_CLOSE_MS,
 								)
 							},
@@ -344,43 +357,96 @@ export default plugin({
 						{
 							label: 'Reply',
 							IconComponent: ReplyIcon,
-							action: () => openReply(userId, activity),
+							action: () => openReply(target),
 						},
 					]}
-					triggerOnTap
+					triggerOnTap={triggerOnTap}
 				>
-					{({ ref }) => anchorFor(el, ref)}
+					{children}
 				</Menu>
 			)
 		}
 
-		cleanup(
-			getModules(
-				withName<StatusPill>('UserProfileCustomStatusBubble'),
-				(module) => {
-					const bubble = module as unknown as { default?: StatusPill }
+		// Renders the client's own pill inside the menu anchor, like Permission Viewer does with role pills.
+		function StatusPillWithMenu({
+			Pill,
+			...props
+		}: StatusPillProps & { Pill: Pill<StatusPillProps> }) {
+			const el = Pill(props)
+			const activity = props.customStatusActivity
+			const userId = activity && ownerOf(activity)
 
-					if (typeof bubble?.default !== 'function')
-						return plugin.reportError(
-							new Error(
-								'UserProfileCustomStatusBubble has no default export, the status menu cannot be installed.',
+			if (!isValidElement(el) || !activity || !userId) return el
+
+			return (
+				<TargetMenu
+					target={{ userId, subject: 'status', text: statusText(activity) }}
+					triggerOnTap
+				>
+					{({ ref }) => anchorFor(el, ref)}
+				</TargetMenu>
+			)
+		}
+
+		function BioTextWithMenu({
+			Pill,
+			...props
+		}: BioTextProps & { Pill: Pill<BioTextProps> }) {
+			const el = Pill(props)
+			const { bio, userId } = props
+
+			if (
+				!isValidElement(el) ||
+				!bio ||
+				!userId ||
+				!(storage.cache?.bio ?? DefaultSettings.bio) ||
+				!refs.friends?.getFriendIDs().includes(userId)
+			)
+				return el
+
+			return (
+				<TargetMenu target={{ userId, subject: 'bio', text: bio }}>
+					{({ ref }) => anchorFor(el, ref)}
+				</TargetMenu>
+			)
+		}
+
+		function patchDefault<P extends object>(
+			name: string,
+			Wrapper: FC<P & { Pill: Pill<P> }>,
+		) {
+			cleanup(
+				getModules(
+					withName<Pill<P>>(name),
+					module => {
+						const namespace = module as unknown as { default?: Pill<P> }
+
+						if (typeof namespace?.default !== 'function')
+							return plugin.reportError(
+								new Error(
+									`${name} has no default export, the menu cannot be installed.`,
+								),
+							)
+
+						cleanup(
+							instead(
+								namespace as { default: Pill<P> },
+								'default',
+								(args, original) =>
+									createElement(Wrapper, {
+										...args[0],
+										Pill: original,
+									} as P & { Pill: Pill<P> }),
 							),
 						)
+					},
+					{ returnNamespace: true },
+				),
+			)
+		}
 
-					cleanup(
-						instead(
-							bubble as { default: StatusPill },
-							'default',
-							(args, original) =>
-								createElement(StatusPillWithMenu, {
-									...args[0],
-									Pill: original,
-								}),
-						),
-					)
-				},
-				{ returnNamespace: true },
-			),
-		)
+		patchDefault('UserProfileCustomStatusBubble', StatusPillWithMenu)
+		patchDefault('BioText', BioTextWithMenu)
 	},
+	SettingsComponent,
 })
