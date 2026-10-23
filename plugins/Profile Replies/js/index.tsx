@@ -142,6 +142,18 @@ function statusText({ emoji, state }: StatusActivity) {
 	return `${unicode} ${state ?? ''}`.trim().replace(/\r?\n/g, ' ')
 }
 
+// Bios pad themselves with invisible characters and blank lines to line up their layout,
+// and server emoji don't render in a quote, so both are dropped.
+function bioText(bio: string) {
+	return bio
+		.replace(/<a?:\w+:\d+>/g, '')
+		.replace(/[\u00A0\u115F\u1160\u200B\u2060\u2800\u3164]/g, ' ')
+		.split(/\r?\n/)
+		.map(line => line.replace(/\s+/g, ' ').trim())
+		.filter(Boolean)
+		.join('\n')
+}
+
 // Discord epoch is 2015-01-01
 const snowflake = () => (BigInt(Date.now() - 1420070400000) << 22n).toString()
 
@@ -394,10 +406,11 @@ export default plugin<{ jsonStorage: Settings }>({
 		}: BioTextProps & { Pill: Pill<BioTextProps> }) {
 			const el = Pill(props)
 			const { bio, userId } = props
+			const text = bio && bioText(bio)
 
 			if (
 				!isValidElement(el) ||
-				!bio ||
+				!text ||
 				!userId ||
 				!(storage.cache?.bio ?? DefaultSettings.bio) ||
 				!refs.friends?.getFriendIDs().includes(userId)
@@ -405,7 +418,7 @@ export default plugin<{ jsonStorage: Settings }>({
 				return el
 
 			return (
-				<TargetMenu target={{ userId, subject: 'bio', text: bio }}>
+				<TargetMenu target={{ userId, subject: 'bio', text }}>
 					{({ ref }) => anchorFor(el, ref)}
 				</TargetMenu>
 			)
