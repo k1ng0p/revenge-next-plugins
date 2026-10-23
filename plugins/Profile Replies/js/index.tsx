@@ -335,16 +335,19 @@ export default plugin<{ jsonStorage: Settings }>({
 		// triggerOnTap is missing from ContextMenuProps but supported by the menu.
 		function TargetMenu({
 			target,
-			triggerOnTap,
+			triggerOnLongPress,
 			children,
 		}: {
 			target: Target
-			triggerOnTap?: boolean
+			triggerOnLongPress?: boolean
 			children: ComponentProps<typeof Design.ContextMenu>['children']
 		}) {
 			const { ContextMenu: Menu } = Design as {
 				ContextMenu: FC<
-					ComponentProps<typeof Design.ContextMenu> & { triggerOnTap?: boolean }
+					ComponentProps<typeof Design.ContextMenu> & {
+						triggerOnTap?: boolean
+						triggerOnLongPress?: boolean
+					}
 				>
 			}
 
@@ -372,7 +375,8 @@ export default plugin<{ jsonStorage: Settings }>({
 							action: () => openReply(target),
 						},
 					]}
-					triggerOnTap={triggerOnTap}
+					triggerOnTap={!triggerOnLongPress}
+					triggerOnLongPress={triggerOnLongPress}
 				>
 					{children}
 				</Menu>
@@ -393,7 +397,6 @@ export default plugin<{ jsonStorage: Settings }>({
 			return (
 				<TargetMenu
 					target={{ userId, subject: 'status', text: statusText(activity) }}
-					triggerOnTap
 				>
 					{({ ref }) => anchorFor(el, ref)}
 				</TargetMenu>
@@ -418,7 +421,10 @@ export default plugin<{ jsonStorage: Settings }>({
 				return el
 
 			return (
-				<TargetMenu target={{ userId, subject: 'bio', text }}>
+				<TargetMenu
+					target={{ userId, subject: 'bio', text }}
+					triggerOnLongPress
+				>
 					{({ ref }) => anchorFor(el, ref)}
 				</TargetMenu>
 			)
