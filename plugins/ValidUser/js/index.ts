@@ -19,7 +19,6 @@ const SNOWFLAKE = /^\d{17,20}$/
 
 type ProfileSheet = (props: { userId: string }) => void
 
-// Discord's legacy alert module, the one that shows the "no access" popup
 type Alerts = { show(props: unknown): unknown }
 
 type Http = {
@@ -78,7 +77,6 @@ function redrawMentions(userId: string) {
 let profileSheet: ProfileSheet | undefined
 let http: Http | undefined
 
-// the same sheet Revenge opens for plugin authors
 function findProfileSheet(): ProfileSheet | undefined {
 	const named = withName('showUserProfileActionSheet')
 	const { ordered, relative } = withDependencies
@@ -158,7 +156,6 @@ export default plugin({
 								profileSheet ??= findProfileSheet()
 								if (userId && profileSheet) {
 									profileSheet({ userId })
-									// puts the user in the cache so the mention can show a name
 									cacheUser(userId)
 										.then(() => redrawMentions(userId))
 										.catch(plugin.reportError)
