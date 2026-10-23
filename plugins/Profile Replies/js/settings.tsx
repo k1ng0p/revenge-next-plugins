@@ -21,7 +21,7 @@ export default function SettingsComponent({
 				<TableSwitchRow
 					icon={<TableRowAssetIcon name="ReactionIcon" />}
 					label="React and reply to bios"
-					subLabel="Long-press a friend's bio on their profile to react or reply."
+					subLabel="Tap a friend's bio on their profile to react or reply."
 					value={bio ?? true}
 					onValueChange={bio => storage.set({ bio })}
 				/>

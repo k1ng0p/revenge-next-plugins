@@ -147,7 +147,10 @@ function statusText({ emoji, state }: StatusActivity) {
 function bioText(bio: string) {
 	return bio
 		.replace(/<a?:\w+:\d+>/g, '')
-		.replace(/[\u00A0\u115F\u1160\u200B\u2060\u2800\u3164]/g, ' ')
+		.replace(
+			/[\u00A0\u00AD\u115F\u1160\u180E\u200B\u200C\u2060-\u2064\u2800\u3164\uFEFF]/g,
+			' ',
+		)
 		.split(/\r?\n/)
 		.map(line => line.replace(/\s+/g, ' ').trim())
 		.filter(Boolean)
@@ -324,7 +327,7 @@ export default plugin<{ jsonStorage: Settings }>({
 			}
 		}
 
-		// The menu hides action sheets as it closes, so the picker has to wait for it.
+		// Closing the menu hides action sheets, so the picker has to wait for it.
 		let pendingReact: ReturnType<typeof setTimeout> | undefined
 
 		cleanup(() => clearTimeout(pendingReact))
@@ -332,22 +335,17 @@ export default plugin<{ jsonStorage: Settings }>({
 		let ReactionIcon: ReturnType<typeof lookupGeneratedIconComponent>
 		let ReplyIcon: ReturnType<typeof lookupGeneratedIconComponent>
 
-		// triggerOnTap is missing from ContextMenuProps but supported by the menu.
 		function TargetMenu({
 			target,
-			triggerOnLongPress,
 			children,
 		}: {
 			target: Target
-			triggerOnLongPress?: boolean
 			children: ComponentProps<typeof Design.ContextMenu>['children']
 		}) {
+			// triggerOnTap is missing from ContextMenuProps but supported by the menu.
 			const { ContextMenu: Menu } = Design as {
 				ContextMenu: FC<
-					ComponentProps<typeof Design.ContextMenu> & {
-						triggerOnTap?: boolean
-						triggerOnLongPress?: boolean
-					}
+					ComponentProps<typeof Design.ContextMenu> & { triggerOnTap?: boolean }
 				>
 			}
 
@@ -375,8 +373,7 @@ export default plugin<{ jsonStorage: Settings }>({
 							action: () => openReply(target),
 						},
 					]}
-					triggerOnTap={!triggerOnLongPress}
-					triggerOnLongPress={triggerOnLongPress}
+					triggerOnTap
 				>
 					{children}
 				</Menu>
@@ -421,11 +418,12 @@ export default plugin<{ jsonStorage: Settings }>({
 				return el
 
 			return (
-				<TargetMenu
-					target={{ userId, subject: 'bio', text }}
-					triggerOnLongPress
-				>
-					{({ ref }) => anchorFor(el, ref)}
+				<TargetMenu target={{ userId, subject: 'bio', text }}>
+					{({ ref }) => (
+						<View ref={ref as never} collapsable={false}>
+							{el}
+						</View>
+					)}
 				</TargetMenu>
 			)
 		}
