@@ -6,7 +6,9 @@ import { React, ReactNative } from '@revenge-mod/react'
 
 export type AlertMode = 'all' | 'news' | 'updates' | 'off'
 
-export type Repo = { url: string; source?: string; discord?: string; badges?: string[] }
+export type PluginKind = 'plugins' | 'themes' | 'icons'
+
+export type Repo = { url: string; source?: string; discord?: string; badges?: string[]; kinds?: Record<string, PluginKind> }
 
 export type ListedPlugin = {
 	id: string
@@ -232,4 +234,26 @@ export function compatibilityWarning(plugin: ListedPlugin, discord?: string, blo
 	const ranges = plugin.discord
 	if (!ranges?.length || !discord) return undefined
 	return ranges.some(range => satisfiesRange(discord, range)) ? undefined : `No version of Discord matching ${ranges[0]} is available`
+}
+
+export const KINDS: { id: PluginKind; label: string; singular: string; plural: string }[] = [
+	{ id: 'plugins', label: 'Plugins', singular: 'plugin', plural: 'plugins' },
+	{ id: 'themes', label: 'Themes', singular: 'theme', plural: 'themes' },
+	{ id: 'icons', label: 'Icons', singular: 'icon pack', plural: 'icon packs' },
+]
+
+// themes and icon packs are plugins that depend on the themes API
+const THEMES_API = 'revenge.api.themes'
+
+// repositories don't say what a themes API plugin contains, so the repository list can name it, otherwise the wording decides
+export function kindOf(plugin: ListedPlugin, overrides?: Record<string, PluginKind>): PluginKind {
+	const named = overrides?.[plugin.id]
+	if (named) return named
+	if (!plugin.requires?.some(entry => entry.split(' ')[0] === THEMES_API)) return 'plugins'
+
+	const text = `${plugin.name} ${plugin.id} ${plugin.description ?? ''}`.toLowerCase()
+	// font and emoji packs have no tab yet, so they stay with the plugins instead of posing as themes
+	if (/emoji|emote|font|typeface/.test(text)) return 'plugins'
+	if (/icon/.test(text)) return 'icons'
+	return 'themes'
 }

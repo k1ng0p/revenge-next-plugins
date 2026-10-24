@@ -4,8 +4,8 @@ import { Stores, withStoreName } from '@revenge-mod/discord/flux'
 import { filters, lookupModule } from '@revenge-mod/modules/finders'
 import { ReactNative } from '@revenge-mod/react'
 import { available, refreshAvailable } from './revenge'
-import { AVATAR_TTL, MAX_REQUESTS, RECHECK_AFTER_FOCUS, REMOTE_LIST, asObject, errorMessage, hostOf, isRemote, reportError, slash, sleep } from './shared'
-import type { AlertMode, ListedPlugin, Listing, Repo } from './shared'
+import { AVATAR_TTL, DAY, KINDS, MAX_REQUESTS, RECHECK_AFTER_FOCUS, REMOTE_LIST, asObject, errorMessage, hostOf, isRemote, kindOf, reportError, slash, sleep } from './shared'
+import type { AlertMode, ListedPlugin, Listing, PluginKind, Repo } from './shared'
 
 export type SeenEntry = {
 	sig: string
@@ -25,6 +25,7 @@ export type StoreData = {
 	newRepos: Record<string, number>
 	updatesSeen: Record<string, Record<string, number>> | null
 	alerts: Record<string, AlertMode>
+	muted: Record<string, PluginKind[]>
 }
 
 type JsonStore = {
@@ -61,6 +62,7 @@ export function readStore(): StoreData {
 		newRepos: asObject(raw.newRepos),
 		updatesSeen: raw.updatesSeen && typeof raw.updatesSeen === 'object' ? raw.updatesSeen : null,
 		alerts: asObject(raw.alerts),
+		muted: asObject(raw.muted),
 	}
 }
 
@@ -79,6 +81,12 @@ export function update(change: (data: StoreData) => Partial<StoreData>) {
 export const save = (patch: Partial<StoreData>) => update(() => patch)
 
 export const setAlertMode = (url: string, mode: AlertMode) => update(data => ({ alerts: { ...data.alerts, [url]: mode } }))
+
+export const setKindMuted = (url: string, kind: PluginKind, muted: boolean) =>
+	update(data => {
+		const rest = (data.muted[url] ?? []).filter(item => item !== kind)
+		return { muted: { ...data.muted, [url]: muted ? [...rest, kind] : rest } }
+	})
 
 export function dismiss(kind: 'news' | 'updates', url: string, id: string) {
 	return update(data => {
@@ -103,17 +111,50 @@ export function dismissRepo(url: string) {
 
 const ackOf = (data?: Partial<StoreData>) => (typeof data?.ack === 'number' ? data.ack : 0)
 
+function kindOfId(repo: Repo, id: string): PluginKind {
+	const plugin = listings.get(repo.url)?.plugins.find(item => item.id === id)
+	return plugin ? kindOf(plugin, repo.kinds) : 'plugins'
+}
+
+// new plugins and recent updates nobody has opened yet, per kind, following each repository's notification settings
+export function pendingByKind(data: Partial<StoreData> | undefined, catalog: Repo[]) {
+	const seen = asObject(data?.seen)
+	const alerts = asObject(data?.alerts)
+	const muted = asObject(data?.muted)
+	const counts: Partial<Record<PluginKind, number>> = {}
+
+	for (const repo of catalog) {
+		const mode: AlertMode = alerts[repo.url] ?? 'news'
+		const entry = asObject(seen[repo.url])
+		const off: PluginKind[] = Array.isArray(muted[repo.url]) ? muted[repo.url] : []
+		const add = (id: string) => {
+			const kind = kindOfId(repo, id)
+			if (!off.includes(kind)) counts[kind] = (counts[kind] ?? 0) + 1
+		}
+		const news = asObject(entry.news)
+		if (mode === 'all' || mode === 'news') Object.keys(news).forEach(add)
+		if (mode === 'all' || mode === 'updates') {
+			for (const [id, change] of Object.entries<{ at: number }>(asObject(entry.updates))) if (Date.now() - change.at < DAY && !news[id]) add(id)
+		}
+	}
+	return counts
+}
+
 export function unreadCount(data: Partial<StoreData> | undefined, catalog: Repo[]) {
 	const seen = asObject(data?.seen)
 	const alerts = asObject(data?.alerts)
+	const muted = asObject(data?.muted)
 	const updatesSeen = asObject(data?.updatesSeen)
 	const ack = ackOf(data)
 
 	let total = 0
 	for (const repo of catalog) {
 		const mode: AlertMode = alerts[repo.url] ?? 'news'
-		if (mode === 'all' || mode === 'news') total += Object.values<number>(asObject(seen[repo.url]?.news)).filter(at => at > ack).length
-		if (mode === 'all' || mode === 'updates') total += Object.values<number>(asObject(updatesSeen[repo.url])).filter(at => at > ack).length
+		const off: PluginKind[] = Array.isArray(muted[repo.url]) ? muted[repo.url] : []
+		const audible = (id: string) => !off.includes(kindOfId(repo, id))
+		if (mode === 'all' || mode === 'news') total += Object.entries<number>(asObject(seen[repo.url]?.news)).filter(([id, at]) => at > ack && audible(id)).length
+		if (mode === 'all' || mode === 'updates')
+			total += Object.entries<number>(asObject(updatesSeen[repo.url])).filter(([key, at]) => at > ack && audible(key.slice(0, key.lastIndexOf('@')))).length
 	}
 	return total
 }
@@ -389,6 +430,12 @@ export function parseRepoList(json: any): Repo[] | null {
 			.filter(Boolean)
 			.slice(0, 4)
 		if (badges.length) repo.badges = badges
+
+		const kinds: Record<string, PluginKind> = {}
+		for (const [id, value] of Object.entries<any>(asObject(item.kinds))) {
+			if (KINDS.some(kind => kind.id === value)) kinds[id.slice(0, 100)] = value
+		}
+		if (Object.keys(kinds).length) repo.kinds = kinds
 		repos.push(repo)
 	}
 	return repos.length ? repos : null

@@ -132,6 +132,14 @@ export function putRepos(url: string, enabled: boolean) {
 	return job
 }
 
+// theme and icon packs are picked in the Themes settings, which needs both of these running
+export const THEME_SUPPORT = [
+	{ id: 'revenge.api.themes', name: 'Themes API' },
+	{ id: 'revenge.settings.themes', name: 'Themes' },
+]
+export const THEMES_SETTINGS = 'revenge.settings.themes'
+export const COMMUNITY_REPO = 'https://revenge-mod.github.io/revenge-community-plugins'
+
 export const setHeld = (id: string, held: boolean) => native('revenge.plugins.setHeld', [id, held])
 
 export function openPluginSettings(id: string) {

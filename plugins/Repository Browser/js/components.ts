@@ -196,6 +196,7 @@ const WARNING: BadgeTone = { fill: '#DA373C', border: '#DA373C', text: '#FFFFFF'
 const BADGE_TONES: Record<string, BadgeTone> = {
 	ports: RARITY_COMMON,
 	themes: RARITY_COMMON,
+	icons: RARITY_COMMON,
 	utility: RARITY_COMMON,
 	popular: RARITY_RARE,
 	active: RARITY_RARE,
@@ -215,7 +216,7 @@ const BADGE_TONES: Record<string, BadgeTone> = {
 	unsafe: WARNING,
 }
 
-const MAX_BADGES = 4
+const MAX_BADGES = 6
 
 function BadgeShapeIcon({ shape, color }: { shape: BadgeShape; color: string }) {
 	const { Image, View } = ReactNative
