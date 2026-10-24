@@ -55,6 +55,30 @@
       "badges": ["Trusted", "Ports"]
     },
     {
+      "url": "https://loki-vtx.github.io/revenge-next/",
+      "source": "https://github.com/Loki-vtx/revenge-next",
+      "discord": "918437723755384832",
+      "badges": ["Trusted", "Ports"]
+    },
+    {
+      "url": "https://purple-eyez.github.io/Revenge-Next-Plugins/",
+      "source": "https://github.com/purple-eyez/Revenge-Next-Plugins",
+      "discord": "646535537334812682",
+      "badges": ["Trusted", "Developer", "Ports", "Themes"]
+    },
+    {
+      "url": "https://mudrhiod.github.io/revenge-next-plugins/",
+      "source": "https://github.com/mudrhiod/revenge-next-plugins",
+      "discord": "807170846497570848",
+      "badges": ["Trusted", "Themes", "icons"]
+    },
+    {
+      "url": "https://marklong0467.github.io/Next-NEFViewing/",
+      "source": "https://github.com/MarkLong0467/Next-NEFViewing",
+      "discord": "1096566768421580912",
+      "badges": ["Utility"]
+    },
+    {
       "url": "https://rn.kmmiio99o.dev/",
       "source": "https://git.gay/kmmiio99o/revenge-next-plugins",
       "discord": "879393496627306587",
