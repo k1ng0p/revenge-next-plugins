@@ -207,6 +207,7 @@ const BADGE_TONES: Record<string, BadgeTone> = {
 	reviewed: RARITY_EPIC,
 	contributor: RARITY_EPIC,
 	official: RARITY_MYTHIC,
+	'built in repo': RARITY_MYTHIC,
 	verified: RARITY_MYTHIC,
 	beta: SECONDARY,
 	unmaintained: WARNING,

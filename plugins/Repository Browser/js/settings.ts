@@ -11,9 +11,11 @@ import {
 	discordUser,
 	dismiss,
 	dismissAll,
+	allowLarge,
 	dismissRepo,
 	freshAvatarEpoch,
 	listings,
+	missingDependencies,
 	openUserProfile,
 	parseAuthor,
 	pendingByKind,
@@ -24,10 +26,10 @@ import {
 	useStore,
 } from './data'
 import type { SeenEntry } from './data'
-import { COMMUNITY_REPO, THEMES_SETTINGS, THEME_SUPPORT, available, blocked, install, installMany, openPluginSettings, pendingReload, putRepos, readState, toggle, uninstall, updatePlugins } from './revenge'
+import { THEMES_SETTINGS, THEME_SUPPORT, available, blocked, install, installMany, openPluginSettings, pendingReload, putRepos, readState, toggle, uninstall, updatePlugins } from './revenge'
 import type { BulkItem } from './revenge'
 import type { RevengeState } from './revenge'
-import { ALERT_MODES, DAY, KINDS, PAGE_SIZE, SORTS, ago, asset, compatibilityWarning, fail, friendlyError, h, hostOf, icon, inform, kindOf, modal, reportError, slash } from './shared'
+import { ALERT_MODES, BUILT_IN_NOTE, COMMUNITY_REPO, DAY, KINDS, PAGE_SIZE, SORTS, ago, asset, compatibilityWarning, copyToClipboard, fail, friendlyError, h, hostOf, icon, inform, isBuiltIn, kindOf, modal, problemsText, recentProblems, reportError, slash } from './shared'
 import type { AlertMode, AvailableUpdate, ListedPlugin, PluginKind, Repo, SortKey } from './shared'
 
 type Hit = { repo: Repo; plugin: ListedPlugin }
@@ -99,6 +101,11 @@ function useBrowser() {
 		}
 	}
 
+	const loadAnyway = (repo: Repo, large: boolean) => {
+		if (large) allowLarge(repo.url)
+		return retry(repo)
+	}
+
 	const retry = async (repo: Repo) => {
 		setRetrying(repo.url)
 		try {
@@ -166,10 +173,9 @@ function useBrowser() {
 	const countOf = (repo: Repo, tab: PluginKind) => (listings.get(repo.url)?.plugins ?? []).filter(plugin => inKind(repo, plugin, tab)).length
 
 	const isEnabled = (id: string) => toggled.get(id)?.value ?? state?.enabled[id]?.enabled ?? false
-	const addedRepo = (url: string) => state?.repos.find(repo => !repo.internal && slash(repo.url) === slash(url))
+	const addedRepo = (url: string) => state?.repos.find(repo => !repo.internal && slash(repo.url) === slash(url)) ?? (isBuiltIn(url) ? { url, enabled: true } : undefined)
 	const repoName = (repo: Repo) => listings.get(repo.url)?.name ?? repo.url
 	const alertMode = (url: string): AlertMode => data?.alerts?.[url] ?? 'news'
-	const isMuted = (url: string, tab: PluginKind) => !!data?.muted?.[url]?.includes(tab)
 	const pings = pendingByKind(data, catalog)
 
 	const pluginName = (id: string) => {
@@ -180,7 +186,7 @@ function useBrowser() {
 		return id
 	}
 
-	const chooseAlerts = (repo: Repo) => {
+	const chooseAlerts = (repo: Repo, off: PluginKind[] = data?.muted?.[repo.url] ?? []) => {
 		const mode = alertMode(repo.url)
 		const kinds = KINDS.filter(item => countOf(repo, item.id) > 0)
 		const perKind = kinds.length > 1
@@ -190,8 +196,13 @@ function useBrowser() {
 			),
 			...(perKind
 				? kinds.map(item => {
-						const muted = isMuted(repo.url, item.id)
-						return h(Button, { key: `kind:${item.id}`, text: `${item.label}: ${muted ? 'off' : 'on'}`, variant: 'tertiary', onPress: () => setKindMuted(repo.url, item.id, !muted) })
+						const muted = off.includes(item.id)
+						const toggleKind = () => {
+							setKindMuted(repo.url, item.id, !muted)
+							// the popup closes on every press, so it comes back with the new state
+							chooseAlerts(repo, muted ? off.filter(kind => kind !== item.id) : [...off, item.id])
+						}
+						return h(Button, { key: `kind:${item.id}`, text: `${item.label}: ${muted ? 'off' : 'on'}`, variant: 'tertiary', onPress: toggleKind })
 					})
 				: []),
 		])
@@ -270,7 +281,14 @@ function useBrowser() {
 				'Required plugins',
 				`${plugin.name} is applied from Settings > Themes, which needs ${names} installed and enabled.`,
 				Button => [
-					h(Button, { key: 'fix', text: 'Install required', variant: 'primary', onPress: () => setupThemeSupport(lacking, repo && { repo, plugin }).then(ok => resolve(ok ? 'done' : 'cancel')) }),
+					h(Button, { key: 'fix', text: 'Install required', variant: 'primary', onPress: () =>
+							setupThemeSupport(lacking, repo && { repo, plugin })
+								.then(ok => resolve(ok ? 'done' : 'cancel'))
+								.catch(error => {
+									fail(error, `set up Themes for ${plugin.name}`)
+									resolve('cancel')
+								}),
+					}),
 					...(repo ? [h(Button, { key: 'skip', text: 'Install anyway', variant: 'secondary', onPress: () => resolve('ready') })] : []),
 					h(Button, { key: 'no', text: 'Cancel', variant: 'secondary', onPress: () => resolve('cancel') }),
 				],
@@ -281,14 +299,23 @@ function useBrowser() {
 
 	const installPlugin = async (repo: Repo, plugin: ListedPlugin) => {
 		setInstalling(plugin.id)
-		const support = kindOf(plugin, repo.kinds) === 'plugins' ? 'ready' : await askThemeSupport(plugin, repo)
-		if (support === 'ready') await install(repo.url, plugin)
-		setInstalling('')
-		syncState()
+		try {
+			const support = kindOf(plugin, repo.kinds) === 'plugins' ? 'ready' : await askThemeSupport(plugin, repo)
+			if (support === 'ready') await install(repo.url, plugin)
+		} catch (e) {
+			fail(e, `install ${plugin.name}`)
+		} finally {
+			setInstalling('')
+			syncState()
+		}
 	}
 
 	const applyPack = async (plugin: ListedPlugin) => {
-		if ((await askThemeSupport(plugin)) === 'ready') openPluginSettings(THEMES_SETTINGS)
+		try {
+			if ((await askThemeSupport(plugin)) === 'ready') openPluginSettings(THEMES_SETTINGS)
+		} catch (e) {
+			fail(e, `apply ${plugin.name}`)
+		}
 	}
 
 	const removePlugin = (plugin: ListedPlugin) =>
@@ -398,7 +425,7 @@ function useBrowser() {
 			origin,
 			actions: pluginActions(repo, plugin, fromSearch),
 			update: updateFor(repo, plugin),
-			warning: compatibilityWarning(plugin, state?.discord, blocked.get(plugin.id)?.text),
+			warning: [compatibilityWarning(plugin, state?.discord, blocked.get(plugin.id)?.text), ...missingDependencies(plugin, state?.installed)].filter(Boolean).join('\n') || undefined,
 			selectable,
 			selected: selection[plugin.id]?.repo.url === repo.url,
 			onPress: selectable ? () => toggleSelect(repo, plugin) : () => openPluginSheet({ repo, plugin, onChange: syncState }),
@@ -491,6 +518,7 @@ function useBrowser() {
 		refreshAll,
 		refreshCurrent,
 		retry,
+		loadAnyway,
 		showRepo,
 		showList,
 		isEnabled,
@@ -595,12 +623,13 @@ function repoRow(b: Ctx, repo: Repo, tab?: PluginKind) {
 
 	let subLabel = 'Loading...'
 	if (listing?.err) subLabel = friendlyError(listing.err)
-	else if (listing?.stale) subLabel = `Couldn't refresh, showing ${listing.saved ? `copy saved ${ago(listing.saved)}` : 'earlier data'}`
+	else if (listing?.stale) subLabel = `Couldn't refresh (${friendlyError(listing.stale)}). Showing ${listing.saved ? `the copy saved ${ago(listing.saved)}` : 'earlier data'}`
 	else if (listing) subLabel = [listing.description, hostOf(repo.url)].filter(Boolean).join('\n')
+	if (repo.builtIn && listing && !failed) subLabel = BUILT_IN_NOTE
 	if (b.newRepos[repo.url]) subLabel = `New repository\n${subLabel}`
 
 	let trailing
-	if (failed) trailing = h(Button, { text: 'Retry', size: 'sm', variant: 'secondary', loading: b.retrying === repo.url, onPress: () => b.retry(repo) })
+	if (failed) trailing = h(Button, { text: listing?.tooLarge ? 'Load anyway' : 'Retry', size: 'sm', variant: 'secondary', loading: b.retrying === repo.url, onPress: () => b.loadAnyway(repo, !!listing?.tooLarge) })
 	else if (listing) trailing = h(TableRow.TrailingText, { text: tab ? `${kindInfoOf(tab).label} \u00b7 ${b.countOf(repo, tab)}` : `${KINDS.reduce((sum, item) => sum + b.countOf(repo, item.id), 0)} listed` })
 
 	const lines = b.newRepos[repo.url] ? 4 : 3
@@ -643,7 +672,7 @@ function emptyList(b: Ctx) {
 }
 
 function MainPage(b: Ctx, tab: PluginKind) {
-	const { TableRowGroup, Text } = Design
+	const { TableRow, TableRowGroup, Text } = Design
 	const { sort } = b
 
 	// a repository stays visible while it loads or fails so it can be retried
@@ -653,7 +682,9 @@ function MainPage(b: Ctx, tab: PluginKind) {
 	}
 	const shown = catalog.filter(hasKind)
 	const isNew = (repo: Repo) => (b.newRepos[repo.url] ? 1 : 0)
-	const repos = sort === 'default' ? [...shown].sort((x, y) => isNew(y) - isNew(x)) : shown.sort((x, y) => b.repoRank(y) - b.repoRank(x) || b.repoName(x).localeCompare(b.repoName(y)))
+	const sorted = sort === 'default' ? [...shown].sort((x, y) => isNew(y) - isNew(x)) : shown.sort((x, y) => b.repoRank(y) - b.repoRank(x) || b.repoName(x).localeCompare(b.repoName(y)))
+	// the built in repository stays at the end whatever the sort is
+	const repos = [...sorted.filter(repo => !repo.builtIn), ...sorted.filter(repo => repo.builtIn)]
 
 	return [
 		h(Notice, { key: 'notice' }),
@@ -664,6 +695,13 @@ function MainPage(b: Ctx, tab: PluginKind) {
 		catalog.length ? null : emptyList(b),
 		catalog.length && !repos.length ? h(Text, { key: 'nokind', variant: 'text-md/medium', color: 'text-muted' }, `No ${kindInfoOf(tab).plural} in the listed repositories yet.`) : null,
 		repos.length ? h(TableRowGroup, { key: 'all', title: 'Repositories', description: `${repos.length} repositories` }, repos.map(repo => repoRow(b, repo, tab))) : null,
+		recentProblems().length
+			? h(
+					TableRowGroup,
+					{ key: 'problems', title: 'Diagnostics' },
+					h(TableRow, { label: `Recent problems (${recentProblems().length})`, subLabel: 'Copy them to share when something breaks', arrow: true, onPress: () => copyToClipboard(problemsText()) }),
+				)
+			: null,
 	]
 }
 
@@ -690,7 +728,7 @@ function SearchPage(b: Ctx) {
 }
 
 function RepoPage(b: Ctx, repo: Repo) {
-	const { Stack, TableRow, TableRowGroup, TableSwitchRow, Text } = Design
+	const { Button, Stack, TableRow, TableRowGroup, TableSwitchRow, Text } = Design
 	const { Linking } = ReactNative
 	const tab = b.repoKind
 	const listing = listings.get(repo.url)
@@ -703,7 +741,7 @@ function RepoPage(b: Ctx, repo: Repo) {
 		else if (listing?.at) lastUpdated = `${listing.stale ? 'Last updated' : 'Updated'} ${ago(listing.at)}`
 	}
 
-	const header = h(TableRowGroup, { key: 'info', title: listing?.name ?? repo.url, description: [hostOf(repo.url), listing?.description].filter(Boolean).join('\n') }, [
+	const header = h(TableRowGroup, { key: 'info', title: listing?.name ?? repo.url, description: [hostOf(repo.url), listing?.description, repo.builtIn ? BUILT_IN_NOTE : undefined].filter(Boolean).join('\n') }, [
 		h(TableRow, { key: 'back', label: 'Back', icon: icon('ArrowLargeLeftIcon'), onPress: b.showList }),
 		h(TableRow, {
 			key: 'author',
@@ -713,8 +751,10 @@ function RepoPage(b: Ctx, repo: Repo) {
 			arrow: !!repo.discord,
 			onPress: repo.discord ? () => openUserProfile(repo.discord!) : undefined,
 		}),
-		entry
-			? h(TableSwitchRow, {
+		repo.builtIn
+			? h(TableRow, { key: 'repo', label: 'Built in', subLabel: 'Always on, it can\'t be turned off or removed', icon: icon('CircleCheckIcon') })
+			: entry
+				? h(TableSwitchRow, {
 					key: 'repo',
 					label: entry.enabled ? 'Repository enabled' : 'Repository disabled',
 					subLabel: entry.enabled ? 'Added to Revenge' : 'Turn on to install its plugins',
@@ -758,7 +798,11 @@ function RepoPage(b: Ctx, repo: Repo) {
 
 	if (listing?.err) {
 		const message = `Failed to load: ${friendlyError(listing.err)}. Use Refresh above to try again.`
-		return [header, h(Text, { key: 'err', variant: 'text-md/medium' }, message)]
+		return [
+			header,
+			h(Text, { key: 'err', variant: 'text-md/medium' }, message),
+			listing.tooLarge ? h(Button, { key: 'large', text: 'Load anyway', variant: 'secondary', onPress: () => b.loadAnyway(repo, true) }) : null,
+		]
 	}
 
 	const others = KINDS.filter(item => item.id !== tab && b.countOf(repo, item.id) > 0)

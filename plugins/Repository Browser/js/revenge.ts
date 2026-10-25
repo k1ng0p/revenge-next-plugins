@@ -1,6 +1,6 @@
 import { RootNavigationRef } from '@revenge-mod/discord/modules/main_tabs_v2'
 import { formatVersion } from '@revenge-mod/plugins/utils'
-import { askReload, asObject, confirm, errorMessage, fail, native, reportError, showError, slash, usesEnvelope } from './shared'
+import { BUILT_IN_REPO, askReload, asObject, confirm, errorMessage, fail, logProblem, native, reportError, showError, slash, usesEnvelope } from './shared'
 import type { AvailableUpdate, ListedPlugin, PluginRef, Repo, RevengeRepo } from './shared'
 export type PendingUpdate = { id: string; name: string; installed: string; available: string; channel: string }
 export type RevengeState = Awaited<ReturnType<typeof readState>>
@@ -46,7 +46,7 @@ export async function readState() {
 
 export async function refreshAvailable(catalog: Repo[]) {
 	const added = await repoList().catch(error => {
-		reportError(error)
+		reportError(error, 'read the added repositories')
 		return []
 	})
 	const envelope = await usesEnvelope()
@@ -56,7 +56,13 @@ export async function refreshAvailable(catalog: Repo[]) {
 
 	const active = catalog.filter(repo => added.some(item => !item.internal && item.enabled && slash(item.url) === slash(repo.url)))
 	// revenge plans updates from its own cached index, so refresh that first
-	await Promise.all(active.map(repo => native('revenge.plugins.repos.refresh', [repo.url]).catch(() => {})))
+	for (let start = 0; start < active.length; start += REFRESH_BATCH) {
+		await Promise.all(
+			active.slice(start, start + REFRESH_BATCH).map(repo =>
+				native('revenge.plugins.repos.refresh', [repo.url]).catch(error => logProblem(`refresh ${repo.url}`, error)),
+			),
+		)
+	}
 
 	if (envelope) {
 		try {
@@ -132,13 +138,15 @@ export function putRepos(url: string, enabled: boolean) {
 	return job
 }
 
+// refreshing every repository at once floods the network and the native side
+const REFRESH_BATCH = 4
+
 // theme and icon packs are picked in the Themes settings, which needs both of these running
 export const THEME_SUPPORT = [
 	{ id: 'revenge.api.themes', name: 'Themes API' },
 	{ id: 'revenge.settings.themes', name: 'Themes' },
 ]
 export const THEMES_SETTINGS = 'revenge.settings.themes'
-export const COMMUNITY_REPO = 'https://revenge-mod.github.io/revenge-community-plugins'
 
 export const setHeld = (id: string, held: boolean) => native('revenge.plugins.setHeld', [id, held])
 
@@ -156,14 +164,19 @@ export async function uninstall(plugin: ListedPlugin, dependents: string[] = [])
 		askReload('Uninstalled. Reload to apply it.')
 		return true
 	} catch (e) {
-		fail(e)
+		fail(e, `uninstall ${plugin.name}`)
 		return false
 	}
 }
 
 export async function install(repoUrl: string, plugin: ListedPlugin, ref?: PluginRef) {
 	try {
-		const known = (await repoList()).find(repo => slash(repo.url) === slash(repoUrl))
+		let known = (await repoList()).find(repo => slash(repo.url) === slash(repoUrl))
+		// the built in repository can't be added by hand, so installing from it adds it
+		if (!known?.enabled && slash(repoUrl) === BUILT_IN_REPO.url) {
+			await putRepos(repoUrl, true)
+			known = (await repoList()).find(repo => slash(repo.url) === slash(repoUrl))
+		}
 		if (!known?.enabled) {
 			showError(new Error('Add this repository to Revenge first'))
 			return false
@@ -186,7 +199,7 @@ export async function install(repoUrl: string, plugin: ListedPlugin, ref?: Plugi
 		if (result?.pending?.length) askReload('Installed. Reload to apply it.')
 		return true
 	} catch (e) {
-		fail(e)
+		fail(e, `install ${plugin.name}`)
 		return false
 	}
 }
@@ -214,7 +227,7 @@ export async function updatePlugins(updates: PendingUpdate[]) {
 		askReload('Updated. Reload to apply it.')
 		return true
 	} catch (e) {
-		reportError(e)
+		reportError(e, 'update plugins')
 		if (done.length) askReload(`Updated ${done.length} of ${updates.length}. ${errorMessage(e)}\nReload to apply the ones that worked.`)
 		else showError(e)
 		return false
@@ -246,7 +259,7 @@ export async function toggle(id: string, on: boolean) {
 		askReload(`${on ? 'Enabled' : 'Disabled'}. Reload to apply it.`)
 		return true
 	} catch (e) {
-		fail(e)
+		fail(e, `${on ? 'enable' : 'disable'} ${id}`)
 		return false
 	}
 }
@@ -298,7 +311,7 @@ export async function installMany(items: BulkItem[]) {
 		askReload(`Installed ${done.length} plugin${done.length === 1 ? '' : 's'}. Reload to apply it.`)
 		return true
 	} catch (e) {
-		reportError(e)
+		reportError(e, 'install plugins')
 		if (done.length) askReload(`Installed ${done.length} of ${items.length}. ${errorMessage(e).split('\n')[0]}\nReload to apply the ones that worked.`)
 		else showError(e)
 		return false

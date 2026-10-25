@@ -4,7 +4,7 @@ import { Stores, withStoreName } from '@revenge-mod/discord/flux'
 import { filters, lookupModule } from '@revenge-mod/modules/finders'
 import { ReactNative } from '@revenge-mod/react'
 import { available, refreshAvailable } from './revenge'
-import { AVATAR_TTL, DAY, KINDS, MAX_REQUESTS, RECHECK_AFTER_FOCUS, REMOTE_LIST, asObject, errorMessage, hostOf, isRemote, kindOf, reportError, slash, sleep } from './shared'
+import { AVATAR_TTL, BUILT_IN_REPO, DAY, KINDS, MAX_REQUESTS, RECHECK_AFTER_FOCUS, REMOTE_LIST, asObject, errorMessage, hostOf, isRemote, kindOf, logProblem, reportError, slash, sleep } from './shared'
 import type { AlertMode, ListedPlugin, Listing, PluginKind, Repo } from './shared'
 
 export type SeenEntry = {
@@ -151,7 +151,8 @@ export function unreadCount(data: Partial<StoreData> | undefined, catalog: Repo[
 	for (const repo of catalog) {
 		const mode: AlertMode = alerts[repo.url] ?? 'news'
 		const off: PluginKind[] = Array.isArray(muted[repo.url]) ? muted[repo.url] : []
-		const audible = (id: string) => !off.includes(kindOfId(repo, id))
+		// a muted kind can only be told apart once the repository's listing is loaded
+		const audible = (id: string) => !off.length || (listings.has(repo.url) && !off.includes(kindOfId(repo, id)))
 		if (mode === 'all' || mode === 'news') total += Object.entries<number>(asObject(seen[repo.url]?.news)).filter(([id, at]) => at > ack && audible(id)).length
 		if (mode === 'all' || mode === 'updates')
 			total += Object.entries<number>(asObject(updatesSeen[repo.url])).filter(([key, at]) => at > ack && audible(key.slice(0, key.lastIndexOf('@')))).length
@@ -179,6 +180,7 @@ function knownUser(id: string) {
 	try {
 		return Stores.UserStore?.getUser?.(id)
 	} catch {
+		// the store may not know this user yet
 		return undefined
 	}
 }
@@ -195,6 +197,7 @@ export async function discordUser(id: string) {
 		hash = body?.avatar ?? null
 		name = body?.global_name ?? body?.username
 	} catch {
+		// the request failed, the store copy below is the fallback
 		const user = knownUser(id)
 		if (!user?.avatar && !user?.username) return { avatar: null, name: null, epoch: avatarEpoch }
 		hash = user.avatar
@@ -253,6 +256,7 @@ function findProfileSheet() {
 	try {
 		return lookupModule(named)[0]
 	} catch {
+		// no profile sheet in this build, openUserProfile opens the link instead
 		return undefined
 	}
 }
@@ -264,6 +268,9 @@ export function openUserProfile(userId: string) {
 }
 
 export const catalog: Repo[] = []
+
+// the built in repository goes last, and a copy in the remote list gives way to it
+const withBuiltIn = (list: Repo[]) => [...list.filter(repo => slash(repo.url) !== BUILT_IN_REPO.url), BUILT_IN_REPO]
 export const listings = new Map<string, Listing>()
 
 const pending = new Map<string, Promise<void>>()
@@ -282,6 +289,13 @@ function freeSlot() {
 	else running--
 }
 
+// real indexes are a few hundred KB, a repository can still be let through by hand
+const MAX_INDEX_BYTES = 20 * 1024 * 1024
+const largeAllowed = new Set<string>()
+export const allowLarge = (url: string) => largeAllowed.add(url)
+
+const tooLarge = () => Object.assign(new Error('Repository is too large'), { permanent: true, tooLarge: true })
+
 async function fetchIndex(url: string, attempt: number, timeout: number) {
 	const controller = new AbortController()
 	const timer = setTimeout(() => controller.abort(), timeout)
@@ -290,7 +304,11 @@ async function fetchIndex(url: string, attempt: number, timeout: number) {
 		const query = attempt === 1 ? '' : `?t=${Date.now()}`
 		const res = await fetch(`${slash(url)}index.json${query}`, { signal: controller.signal })
 		if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { permanent: res.status < 500 && res.status !== 429 })
-		const json = await res.json()
+		const limited = !largeAllowed.has(url)
+		if (limited && Number(res.headers.get('content-length')) > MAX_INDEX_BYTES) throw tooLarge()
+		const body = await res.text()
+		if (limited && body.length > MAX_INDEX_BYTES) throw tooLarge()
+		const json = JSON.parse(body)
 		if (!json?.plugins || typeof json.plugins !== 'object' || Array.isArray(json.plugins)) throw Object.assign(new Error('Not a Revenge repository'), { permanent: true })
 		return json
 	} finally {
@@ -316,7 +334,7 @@ async function fetchRepo(url: string) {
 const text = (value: any, max: number) => (typeof value === 'string' || typeof value === 'number' ? String(value).slice(0, max) : undefined)
 const shortLink = (value: any) => (typeof value === 'string' && value.length <= 300 ? value : undefined)
 
-const trustedHosts = /(^|\.)(github\.com|githubusercontent\.com|github\.io|discordapp\.com)$/
+const trustedHosts = /(^|\.)(github\.com|githubusercontent\.com|discordapp\.com)$/
 
 // remote icons are fetched by the app, so only the repository's own host and well-known CDNs are allowed
 function safeIcon(value: any, repoUrl: string) {
@@ -400,8 +418,11 @@ export function load(url: string) {
 		})
 		.catch((e: any) => {
 			const err = e?.name === 'AbortError' ? 'Request timed out' : errorMessage(e)
+			// being offline or slow is routine, anything else about a repository is worth a report
+			if (e?.name === 'AbortError' || /network request failed/i.test(err)) logProblem(`load ${url}`, e)
+			else reportError(e, `load ${url}`)
 			const previous = listings.get(url)
-			listings.set(url, previous && !previous.err ? { ...previous, stale: err } : { name: url, plugins: [], err })
+			listings.set(url, previous && !previous.err ? { ...previous, stale: err, tooLarge: !!e?.tooLarge } : { name: url, plugins: [], err, tooLarge: !!e?.tooLarge })
 		})
 		.finally(() => {
 			freeSlot()
@@ -451,7 +472,7 @@ async function fetchRepoList() {
 			if (res.status < 500) return null
 		} catch (e) {
 			// offline or timed out keeps the saved list, but a list that can't be read is worth reporting
-			if (e instanceof SyntaxError) reportError(e)
+			if (e instanceof SyntaxError) reportError(e, 'read the repository list')
 		} finally {
 			clearTimeout(timer)
 		}
@@ -464,7 +485,7 @@ async function refreshCatalog() {
 	const next = await fetchRepoList()
 	if (!next) return
 
-	catalog.splice(0, catalog.length, ...next)
+	catalog.splice(0, catalog.length, ...withBuiltIn(next))
 	await update(data => {
 		const first = !data.known
 		const known = new Set(data.known ?? next.map(repo => repo.url))
@@ -553,7 +574,7 @@ export async function checkUpdates(only?: string[], onEach?: () => void) {
 	const checked = only
 		? null
 		: await refreshAvailable(catalog).catch(error => {
-				reportError(error)
+				reportError(error, 'check for plugin updates')
 				return null
 			})
 	lastCheck = Date.now()
@@ -575,7 +596,7 @@ export async function checkUpdates(only?: string[], onEach?: () => void) {
 export function restore() {
 	ready = whenLoaded().then(() => {
 		const data = readStore()
-		catalog.splice(0, catalog.length, ...(parseRepoList(data.remote?.repos) ?? []))
+		catalog.splice(0, catalog.length, ...withBuiltIn(parseRepoList(data.remote?.repos) ?? []))
 		for (const [url, snap] of Object.entries<any>(data.snaps)) {
 			if (catalog.some(repo => repo.url === url)) listings.set(url, { ...cleanListing(snap?.data, url), saved: snap?.at })
 		}
@@ -584,6 +605,18 @@ export function restore() {
 }
 
 // requirements are listed as "id 1.2.0" or "id 1.2.0 (optional)"
+// what a plugin needs that nothing installed or listed can give, ids Revenge itself provides are left out
+export function missingDependencies(plugin: ListedPlugin, installed?: Map<string, unknown>) {
+	const missing: string[] = []
+	for (const entry of plugin.requires ?? []) {
+		if (entry.endsWith('(optional)')) continue
+		const id = entry.split(' ')[0]
+		if (id.startsWith('revenge.') || id === 'discord' || installed?.has(id)) continue
+		if (!catalog.some(repo => listings.get(repo.url)?.plugins.some(listed => listed.id === id))) missing.push(`Needs ${id}, which isn't in any listed repository`)
+	}
+	return missing
+}
+
 export function dependentsOf(id: string, installed: Map<string, unknown>) {
 	const names = new Set<string>()
 	for (const listing of listings.values()) {

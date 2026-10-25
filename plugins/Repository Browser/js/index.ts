@@ -20,7 +20,7 @@ export default plugin({
 			let attempts = 0
 			let stopped = false
 
-			const poll = () => checkUpdates().catch(reportError)
+			const poll = () => checkUpdates().catch(error => reportError(error, 'check for updates'))
 			poll().then(() => settings.refreshSettings())
 
 			const interval = setInterval(poll, POLL_INTERVAL)
@@ -34,6 +34,7 @@ export default plugin({
 					settings.addSettingsItemToSection('REVENGE', items => items)()
 					return true
 				} catch {
+					// the Revenge section isn't registered yet
 					return false
 				}
 			}

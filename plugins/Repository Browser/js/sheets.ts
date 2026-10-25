@@ -1,18 +1,17 @@
 import { FormSwitch, SheetHeader, TableRowAssetIcon } from '@revenge-mod/components'
-import { ActionSheetActionCreators, ToastActionCreators } from '@revenge-mod/discord/actions'
+import { ActionSheetActionCreators } from '@revenge-mod/discord/actions'
 import { Tokens } from '@revenge-mod/discord/common/tokens'
 import { Design } from '@revenge-mod/discord/design'
 import { BottomSheet as Gorhom } from '@revenge-mod/externals/gorhom'
-import { Clipboard } from '@revenge-mod/externals/react-native-clipboard'
 import { ReactNativeSafeAreaContext } from '@revenge-mod/externals/react-native-safe-area-context'
 import { parsePluginContributor } from '@revenge-mod/plugins/utils'
 import { React, ReactNative } from '@revenge-mod/react'
 import { lookupGeneratedIconComponent } from '@revenge-mod/utils/discord'
-import { catalog, dependentsOf, listings, openUserProfile } from './data'
+import { catalog, dependentsOf, listings, missingDependencies, openUserProfile } from './data'
 import { available, blocked, install, openPluginSettings, pendingReload, putRepos, readState, setHeld, toggle, uninstall, updatePlugins } from './revenge'
 import type { BulkItem } from './revenge'
 import type { RevengeState } from './revenge'
-import { ICON_INDENT, asset, compatibilityWarning, fail, formatBytes, h, icon, iconSlot, native, reportError, slash } from './shared'
+import { ICON_INDENT, asset, isBuiltIn, compatibilityWarning, copyToClipboard, fail, formatBytes, h, icon, iconSlot, native, reportError, slash } from './shared'
 import type { ListedPlugin, PluginRef, Repo, RepoListing } from './shared'
 
 const PLUGIN_SHEET = 'plugin-browser-plugin-sheet'
@@ -61,18 +60,13 @@ async function findListing(repo: string, id: string, refresh = false): Promise<R
 	return fresh.find(listing => listing.id === id)
 }
 
-function copyToClipboard(text: string) {
-	Clipboard.setString(text)
-	ToastActionCreators.open('PLUGIN_BROWSER_COPIED', { text: 'Copied to clipboard', icon: lookupGeneratedIconComponent('CopyIcon') })
-}
-
 function ContributorEntries({ contributor }: { contributor: { name: string; ids: string[]; links: { url: string; label?: string }[] } }) {
 	const { View, Linking } = ReactNative
 	const { TableRow, TableRowGroup, Text } = Design
 	const { bottom } = ReactNativeSafeAreaContext.useSafeAreaInsets()
 
 	const ids = [...new Set(contributor.ids)].slice(0, MAX_SHOWN_ENTRIES)
-	const links = [...new Map(contributor.links.map(link => [link.url, link])).values()].slice(0, MAX_SHOWN_ENTRIES)
+	const links = [...new Map(contributor.links.filter(link => /^(https:|mailto:)/i.test(link.url)).map(link => [link.url, link])).values()].slice(0, MAX_SHOWN_ENTRIES)
 
 	return h(
 		View,
@@ -253,7 +247,7 @@ function RefPickerSheet({ id, repo, pluginRef, onSelect }: RefPickerProps) {
 			try {
 				setListing((await findListing(repo, id, refresh)) ?? null)
 			} catch (e) {
-				fail(e)
+				fail(e, `load ${id}`)
 				if (!refresh) setListing(null)
 			} finally {
 				setLoading(false)
@@ -430,7 +424,7 @@ function PluginSheet({ repo: initialRepo, plugin, onChange }: SheetProps) {
 
 	const installed = state?.installed.get(id)
 	const source = installed?.source ?? null
-	const entry = state?.repos.find(item => !item.internal && slash(item.url) === slash(repo.url))
+	const entry = state?.repos.find(item => !item.internal && slash(item.url) === slash(repo.url)) ?? (isBuiltIn(repo.url) ? { url: repo.url, enabled: true } : undefined)
 	const enabled = enabledNow ?? state?.enabled[id]?.enabled ?? false
 	const reloadPending = pendingReload.has(id) || !!state?.enabled[id]?.pendingReload
 	const update = available.get(id)
@@ -458,7 +452,7 @@ function PluginSheet({ repo: initialRepo, plugin, onChange }: SheetProps) {
 			: ((listing && versionOfChannel(listing, currentRef.channel)) ?? plugin.version ?? '')
 
 	const byline = h(PluginByline, { plugin, version: versionText ? `v${versionText}` : undefined })
-	const warning = compatibilityWarning(plugin, state?.discord, blocked.get(id)?.text)
+	const warning = [compatibilityWarning(plugin, state?.discord, blocked.get(id)?.text), ...missingDependencies(plugin, state?.installed)].filter(Boolean).join('\n') || undefined
 
 	const switchOrInstall = installed
 		? h(FormSwitch, { value: enabled, disabled: reloadPending, onValueChange: (value: boolean) => toggle(id, value).then(done => done && (setEnabledNow(value), changed())) })
