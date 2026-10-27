@@ -102,6 +102,12 @@
       "discord": "1278723517436788897",
       "badges": ["Trusted", "Utility"]
     },
+     {
+      "url": "https://dxckie-cell.github.io/revenge-next-plugins",
+      "source": "https://github.com/dxckie-cell/revenge-next-plugins",
+      "discord": "",
+      "badges": ["Utility", "Ports"]
+    },
     {
       "url": "https://next.jarviscli.dev/",
       "source": "https://code.is-your.app/SheWhoReignsSupreme/revenge-next-plugs",
