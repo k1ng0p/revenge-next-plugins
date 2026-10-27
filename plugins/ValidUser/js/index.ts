@@ -166,7 +166,7 @@ export default plugin({
 							plugin.reportError(error)
 						}
 
-						return orig(props)
+						return orig.call(alerts, props)
 					}),
 				)
 			}),
