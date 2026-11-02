@@ -1,4 +1,4 @@
-# k1ng0p Revenge Plugins
+# k1ng0p Revenge Plugins (Revenge next is ded) 
 
 Revenge Next plugin repository.
 
